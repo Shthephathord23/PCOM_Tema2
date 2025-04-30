@@ -284,7 +284,7 @@ int main(int argc, char *argv[]) {
 
         // --- Check TCP listener for new connections ---
         // Check only if the event occurred
-        if (poll_fds[0].revents & POLLIN) {
+        if (running && (poll_fds[0].revents & POLLIN)) {
             struct sockaddr_in client_addr;
             socklen_t client_len = sizeof(client_addr);
             int client_socket = accept(tcp_socket, (struct sockaddr *) &client_addr, &client_len);
@@ -363,7 +363,7 @@ int main(int argc, char *argv[]) {
 
         // --- Check UDP socket for messages ---
         // Check only if the event occurred
-        if (poll_fds[1].revents & POLLIN) {
+        if (running && (poll_fds[1].revents & POLLIN)) {
             UdpMessage udp_msg;
             struct sockaddr_in udp_sender_addr;
             socklen_t udp_sender_len = sizeof(udp_sender_addr);

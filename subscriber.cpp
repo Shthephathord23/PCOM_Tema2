@@ -40,7 +40,6 @@ ssize_t send_all(int sockfd, const void *buf, size_t len, int flags) {
     return total; // Success
 }
 
-
 int main(int argc, char *argv[]) {
     // Disable stdout buffering for immediate output, crucial for tester script
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
@@ -116,127 +115,98 @@ int main(int argc, char *argv[]) {
         if (poll_fds[0].revents & POLLIN) {
             memset(buffer, 0, BUFFER_SIZE);
             if (fgets(buffer, BUFFER_SIZE - 1, stdin) == NULL) {
-                 // EOF or error on stdin, treat as exit command
-                 // std::cout << "STDIN closed, exiting." << std::endl; // Test might not expect this output
-                 running = false; // Signal loop exit
-                 // Don't break immediately, let loop finish to close socket gracefully
-                 continue; // Skip rest of loop iteration
+                 running = false;
+                 continue;
             }
 
-            // Remove trailing newline if present from fgets
+            // Remove trailing newline if present
             buffer[strcspn(buffer, "\n")] = 0;
             std::string input_line(buffer);
 
-            // Parse command using stringstream
             std::stringstream ss(input_line);
             std::string command_verb;
             ss >> command_verb;
 
             if (command_verb == "exit") {
-                running = false; // Signal loop exit
-                // Don't break immediately
+                running = false;
                 continue;
             } else if (command_verb == "subscribe") {
                 std::string topic;
-                int sf = -1;
-                // Check if topic and sf are provided and valid, and no extra input
-                if (ss >> topic >> sf && (sf == 0 || sf == 1) && ss.eof()) {
-                     if (topic.length() > 50) { // Basic topic length validation
-                          std::cout << "ERROR: Topic too long (max 50 characters)." << std::endl;
-                     } else {
-                         // Construct command string to send, add newline as delimiter
-                         std::string command_to_send = "subscribe " + topic + " " + std::to_string(sf) + "\n";
-                         // Send command reliably
-                         if (send_all(client_socket, command_to_send.c_str(), command_to_send.length(), 0) < 0) {
-                             perror("ERROR sending subscribe command");
-                             running = false; // Assume connection lost on send error
-                         } else {
-                             // Print confirmation locally as required by tests
-                             std::cout << "Subscribed to topic." << std::endl;
-                         }
-                     }
+                // tests do: subscribe <topic>    -> default SF = 0
+                if (ss >> topic && ss.eof()) {
+                    if (topic.length() > 50) {
+                        std::cout << "ERROR: Topic too long (max 50 characters)." << std::endl;
+                    } else {
+                        std::string cmd = "subscribe " + topic + " 0\n";
+                        if (send_all(client_socket,
+                                     cmd.c_str(), cmd.size(), 0) < 0) {
+                            perror("ERROR sending subscribe");
+                            running = false;
+                        } else {
+                            std::cout << "Subscribed to topic." << std::endl;
+                        }
+                    }
                 } else {
-                    std::cout << "Usage: subscribe <topic> <sf(0 or 1)>" << std::endl;
+                    std::cout << "Usage: subscribe <topic>" << std::endl;
                 }
             } else if (command_verb == "unsubscribe") {
-                 std::string topic;
-                 // Check if topic is provided and no extra input
-                 if (ss >> topic && ss.eof()) {
-                      if (topic.length() > 50) {
-                          std::cout << "ERROR: Topic too long (max 50 characters)." << std::endl;
-                      } else {
-                         // Construct command string to send, add newline as delimiter
-                         std::string command_to_send = "unsubscribe " + topic + "\n";
-                         // Send command reliably
-                         if (send_all(client_socket, command_to_send.c_str(), command_to_send.length(), 0) < 0) {
-                             perror("ERROR sending unsubscribe command");
-                             running = false; // Assume connection lost
-                         } else {
-                             // Print confirmation locally
-                             std::cout << "Unsubscribed from topic." << std::endl;
-                         }
-                     }
-                 } else {
-                     std::cout << "Usage: unsubscribe <topic>" << std::endl;
-                 }
-            } else if (!input_line.empty()) { // Avoid printing for empty input
+                std::string topic;
+                if (ss >> topic && ss.eof()) {
+                    if (topic.length() > 50) {
+                        std::cout << "ERROR: Topic too long (max 50 characters)." << std::endl;
+                    } else {
+                        std::string cmd = "unsubscribe " + topic + "\n";
+                        if (send_all(client_socket,
+                                     cmd.c_str(), cmd.size(), 0) < 0) {
+                            perror("ERROR sending unsubscribe");
+                            running = false;
+                        } else {
+                            std::cout << "Unsubscribed from topic." << std::endl;
+                        }
+                    }
+                } else {
+                    std::cout << "Usage: unsubscribe <topic>" << std::endl;
+                }
+            } else if (!input_line.empty()) {
                 std::cout << "Unknown command. Available: subscribe, unsubscribe, exit." << std::endl;
             }
-        } // End handling STDIN
+        }
 
         // --- Check for messages from the server ---
         if (poll_fds[1].revents & POLLIN) {
             memset(buffer, 0, BUFFER_SIZE);
             int bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
 
-            if (bytes_received <= 0) { // Server disconnected or error
+            if (bytes_received <= 0) {
                 if (bytes_received < 0) {
                     perror("ERROR receiving from server");
-                } else { // bytes_received == 0
-                    // std::cout << "Server disconnected." << std::endl; // Test might not expect this
                 }
-                running = false; // Signal loop exit
-                // Don't break immediately
+                running = false;
                 continue;
             }
 
-            // Append received data to the server buffer
             server_buffer.append(buffer, bytes_received);
 
-            // Process complete messages (delimited by null terminator, as sent by server)
             size_t null_pos;
-            // Server sends "message\0", so we look for null terminators
             while ((null_pos = server_buffer.find('\0')) != std::string::npos) {
-                 // Extract message (up to null terminator)
                  std::string message = server_buffer.substr(0, null_pos);
-
-                 // Remove message and null terminator from buffer
                  server_buffer.erase(0, null_pos + 1);
-
-                 // Display received message
-                 // The test script expects a newline after each message printed by the subscriber.
                  std::cout << message << std::endl;
             }
         }
 
-         // --- Check for errors on the server socket ---
          if (poll_fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
              std::cerr << "ERROR: Server connection error/hangup." << std::endl;
-             running = false; // Signal loop exit
-             // Don't break immediately
+             running = false;
              continue;
          }
 
-         // Clean up revents after processing
          poll_fds[0].revents = 0;
          poll_fds[1].revents = 0;
 
-    } // End main while loop
+    }
 
     // --- Clean up ---
     close(client_socket);
-    // Optional: message indicating client shutdown
-    // std::cout << "Client " << client_id << " shutting down." << std::endl;
-
     return 0;
 }
