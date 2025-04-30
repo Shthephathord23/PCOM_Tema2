@@ -9,7 +9,7 @@ INC_DIR := include
 
 SOURCES_SERVER := $(SRC_DIR)/server.cpp
 SOURCES_SUBSCRIBER := $(SRC_DIR)/subscriber.cpp
-SOURCES_COMMON := $(LIB_DIR)/common.cpp
+SOURCES_COMMON := $(LIB_DIR)/common.cpp $(LIB_DIR)/circular_buffer.cpp
 
 OBJECTS_SERVER := $(notdir $(SOURCES_SERVER:.cpp=.o))
 OBJECTS_SUBSCRIBER := $(notdir $(SOURCES_SUBSCRIBER:.cpp=.o))

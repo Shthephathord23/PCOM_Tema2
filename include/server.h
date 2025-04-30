@@ -35,6 +35,8 @@ struct UdpMessage {
     char content[MAX_CONTENT_SIZE + 1]; // Raw content + potential null terminator space
     struct sockaddr_in sender_addr;
     int content_len; // Actual length of content received
+
+    std::string parseMessage();
 };
 
 // --- Function Declarations ---

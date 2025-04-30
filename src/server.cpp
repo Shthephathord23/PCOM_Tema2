@@ -60,41 +60,45 @@ bool topicMatches(const std::string& topic, const std::string& pattern) {
 
 
 // (parseMessage implementation remains the same as in the original file)
-std::string parseMessage(const UdpMessage& msg) {
+std::string UdpMessage::parseMessage()
+{
     std::stringstream result_ss; // Use stringstream for easier formatting
 
     // Add IP and port of sender
     char sender_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(msg.sender_addr.sin_addr), sender_ip, INET_ADDRSTRLEN);
-    result_ss << sender_ip << ":" << ntohs(msg.sender_addr.sin_port) << " - ";
+    inet_ntop(AF_INET, &(this->sender_addr.sin_addr), sender_ip, INET_ADDRSTRLEN);
+    result_ss << sender_ip << ":" << ntohs(this->sender_addr.sin_port) << " - ";
 
     // Add topic
-    result_ss << msg.topic << " - ";
+    result_ss << this->topic << " - ";
 
     // Parse content based on type
-    switch(msg.type) {
+    switch(this->type) {
         case 0: {  // INT
-            if (msg.content_len < 5) { // Need 1 byte sign + 4 bytes value
+            if (this->content_len < 5) { // Need 1 byte sign + 4 bytes value
                  result_ss << "INT - INVALID DATA";
                  break;
             }
-            uint8_t sign_byte = msg.content[0];
+            uint8_t sign_byte = this->content[0];
             uint32_t net_value;
-            memcpy(&net_value, msg.content + 1, sizeof(uint32_t)); // Copy value after sign byte
+            memcpy(&net_value, this->content + 1, sizeof(uint32_t)); // Copy value after sign byte
             int value = ntohl(net_value); // Convert from network byte order
             if (sign_byte == 1) {
                 value = -value; // Apply sign
+            } else if (sign_byte != 0) {
+                result_ss << "INT - INVALID SIGN BYTE";
+                break;
             }
             result_ss << "INT - " << value;
             break;
         }
         case 1: {  // SHORT_REAL
-             if (msg.content_len < 2) { // Need 2 bytes value
+             if (this->content_len < 2) { // Need 2 bytes value
                  result_ss << "SHORT_REAL - INVALID DATA";
                  break;
             }
             uint16_t net_value;
-            memcpy(&net_value, msg.content, sizeof(uint16_t));
+            memcpy(&net_value, this->content, sizeof(uint16_t));
             float value = ntohs(net_value) / 100.0f; // Convert and scale
             // Format to two decimal places, ensuring trailing zeros if needed
             result_ss << "SHORT_REAL - " << std::fixed << std::setprecision(2) << value;
@@ -102,21 +106,25 @@ std::string parseMessage(const UdpMessage& msg) {
             break;
         }
         case 2: {  // FLOAT
-             if (msg.content_len < 6) { // Need 1 byte sign + 4 bytes value + 1 byte power
+             if (this->content_len < 6) { // Need 1 byte sign + 4 bytes value + 1 byte power
                  result_ss << "FLOAT - INVALID DATA";
                  break;
              }
-             uint8_t sign_byte = msg.content[0];
+             uint8_t sign_byte = this->content[0];
              uint32_t net_value;
-             memcpy(&net_value, msg.content + 1, sizeof(uint32_t));
-             uint8_t power_byte = msg.content[5];
+             memcpy(&net_value, this->content + 1, sizeof(uint32_t));
+             uint8_t power_byte = this->content[5];
 
              double value = ntohl(net_value);
              if (power_byte > 0) {
                  value *= pow(10.0, -static_cast<double>(power_byte));
              }
+
              if (sign_byte == 1) {
                  value = -value;
+             } else if (sign_byte != 0) {
+                 result_ss << "FLOAT - INVALID SIGN BYTE";
+                 break;
              }
              // Print exactly power_byte decimals
              result_ss << "FLOAT - "
@@ -128,14 +136,14 @@ std::string parseMessage(const UdpMessage& msg) {
         }
         case 3: {  // STRING
             char string_content[MAX_CONTENT_SIZE + 1];
-            int len_to_copy = std::min(msg.content_len, MAX_CONTENT_SIZE);
-            memcpy(string_content, msg.content, len_to_copy);
+            int len_to_copy = std::min(this->content_len, MAX_CONTENT_SIZE);
+            memcpy(string_content, this->content, len_to_copy);
             string_content[len_to_copy] = '\0';
             result_ss << "STRING - " << string_content;
             break;
         }
         default:
-            result_ss << "UNKNOWN TYPE (" << (int)msg.type << ")";
+            result_ss << "UNKNOWN TYPE (" << (int)this->type << ")";
     }
 
     return result_ss.str();
@@ -419,7 +427,7 @@ static void handle_udp_message(int udp_socket,
     }
 
     // Format the message string once
-    std::string formatted_msg_str = parseMessage(udp_msg);
+    std::string formatted_msg_str = udp_msg.parseMessage();
     std::string topic_str(udp_msg.topic);
 
     // --- Distribute message to relevant subscribers ---
@@ -488,6 +496,11 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
         }
 
         bool client_disconnected = false;
+
+        if (!sub_ptr) {
+            client_disconnected = true; // Treat as error, close it
+            goto cleanup; // Skip to cleanup
+        }
 
         // Handle disconnection/error first
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
@@ -583,6 +596,7 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
             } // End handling received data
         } // End handling POLLIN
 
+        cleanup:;    // Cleanup label for goto
         // Cleanup if client disconnected or error occurred
         if (client_disconnected) {
             close(client_socket);
