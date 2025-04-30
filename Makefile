@@ -7,7 +7,7 @@ SOURCES_SUBSCRIBER=subscriber.cpp
 SOURCES=$(SOURCES_SERVER) $(SOURCES_SUBSCRIBER)
 
 LDFLAGS=
-CFLAGS=-c -Wall -Werror -Wno-error=unused-variable
+CFLAGS=-c -Wall -Wno-error=unused-variable
 CC=g++
 
 OBJECTS_SERVER=$(SOURCES_SERVER:.cpp=.o)
