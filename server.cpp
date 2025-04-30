@@ -150,36 +150,32 @@ std::string parseMessage(const UdpMessage& msg) {
              if (msg.content_len < 6) { // Need 1 byte sign + 4 bytes value + 1 byte power
                  result_ss << "FLOAT - INVALID DATA";
                  break;
-            }
-            uint8_t sign_byte = msg.content[0];
-            uint32_t net_value;
-            memcpy(&net_value, msg.content + 1, sizeof(uint32_t)); // Value after sign byte
-            uint8_t power_byte = msg.content[5]; // Power byte after sign and value
+             }
+             uint8_t sign_byte = msg.content[0];
+             uint32_t net_value;
+             memcpy(&net_value, msg.content + 1, sizeof(uint32_t));
+             uint8_t power_byte = msg.content[5];
 
-            double value = ntohl(net_value); // Use double for intermediate precision
-            // Calculate 10^(-power_byte)
-            double divisor = 1.0;
-            // Use pow for simplicity and correctness, check for large power_byte if necessary
-            if (power_byte > 0) { // Avoid pow(10, 0) issues if any
-                 divisor = pow(10.0, -static_cast<double>(power_byte));
-            }
-             // Check for potential overflow if power_byte is very large, though unlikely here
-            value *= divisor; // Apply scaling
-
-            if (sign_byte == 1) {
-                value = -value; // Apply sign
-            }
-            // Use default precision for double, which is usually sufficient
-            result_ss << "FLOAT - " << value;
-            break;
+             double value = ntohl(net_value);
+             if (power_byte > 0) {
+                 value *= pow(10.0, -static_cast<double>(power_byte));
+             }
+             if (sign_byte == 1) {
+                 value = -value;
+             }
+             // Print exactly power_byte decimals
+             result_ss << "FLOAT - "
+                       << std::fixed << std::setprecision(power_byte)
+                       << value;
+             // Reset floatfield so it doesn't leak into next prints
+             result_ss.unsetf(std::ios_base::floatfield);
+             break;
         }
         case 3: {  // STRING
-            // Content is directly used as string, ensure it's treated correctly
-            // Copy up to content_len, ensuring null termination within buffer bounds
             char string_content[MAX_CONTENT_SIZE + 1];
             int len_to_copy = std::min(msg.content_len, MAX_CONTENT_SIZE);
             memcpy(string_content, msg.content, len_to_copy);
-            string_content[len_to_copy] = '\0'; // Ensure null termination
+            string_content[len_to_copy] = '\0';
             result_ss << "STRING - " << string_content;
             break;
         }
