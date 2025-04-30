@@ -1,33 +1,44 @@
-SERVER=server
-SUBSCRIBER=subscriber
-PROJECT=$(SERVER) $(SUBSCRIBER)
+CXX := g++
+CPPFLAGS := -Iinclude
+CXXFLAGS := -Wall -Wextra -g -std=c++11 -fPIC
+LDFLAGS := -lm
 
-SOURCES_SERVER=server.cpp
-SOURCES_SUBSCRIBER=subscriber.cpp
-SOURCES=$(SOURCES_SERVER) $(SOURCES_SUBSCRIBER)
+SRC_DIR := src
+LIB_DIR := lib
+INC_DIR := include
 
-LDFLAGS=
-CFLAGS=-c -Wall -Wno-error=unused-variable
-CC=g++
+SOURCES_SERVER := $(SRC_DIR)/server.cpp
+SOURCES_SUBSCRIBER := $(SRC_DIR)/subscriber.cpp
+SOURCES_COMMON := $(LIB_DIR)/common.cpp
 
-OBJECTS_SERVER=$(SOURCES_SERVER:.cpp=.o)
-OBJECTS_SUBSCRIBER=$(SOURCES_SUBSCRIBER:.cpp=.o)
-OBJECTS=$(OBJECTS_SERVER) $(OBJECTS_SUBSCRIBER)
+OBJECTS_SERVER := $(notdir $(SOURCES_SERVER:.cpp=.o))
+OBJECTS_SUBSCRIBER := $(notdir $(SOURCES_SUBSCRIBER:.cpp=.o))
+OBJECTS_COMMON := $(notdir $(SOURCES_COMMON:.cpp=.o))
 
-BINARY=$(PROJECT)
+ALL_OBJECTS := $(OBJECTS_SERVER) $(OBJECTS_SUBSCRIBER) $(OBJECTS_COMMON)
 
-all: $(SOURCES) $(BINARY)
+SERVER_EXEC := server
+SUBSCRIBER_EXEC := subscriber
+BINARY := $(SERVER_EXEC) $(SUBSCRIBER_EXEC)
 
-$(SERVER): $(OBJECTS_SERVER)
-	$(CC) $(OBJECTS_SERVER) $(LDFLAGS) -o $@
+VPATH := $(SRC_DIR):$(LIB_DIR)
 
-$(SUBSCRIBER): $(OBJECTS_SUBSCRIBER)
-	$(CC) $(OBJECTS_SUBSCRIBER) $(LDFLAGS) -o $@
+all: $(BINARY)
 
-.cpp.o:
-	$(CC) $(CFLAGS) -fPIC $< -o $@
+$(SERVER_EXEC): $(OBJECTS_SERVER) $(OBJECTS_COMMON)
+	@echo "Linking $@..."
+	$(CXX) $^ -o $@ $(LDFLAGS)  # Use CXX, $^ includes both prerequisites
+
+$(SUBSCRIBER_EXEC): $(OBJECTS_SUBSCRIBER) $(OBJECTS_COMMON)
+	@echo "Linking $@..."
+	$(CXX) $^ -o $@ $(LDFLAGS) # Use CXX, $^ includes both prerequisites
+
+%.o: %.cpp $(INC_DIR)/* Makefile
+	@echo "Compiling $< (found via VPATH) --> $@"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@ # $< is the prerequisite (.cpp)
 
 clean:
-	rm -rf $(OBJECTS) $(PROJECT)
+	@echo "Cleaning up..."
+	rm -f $(ALL_OBJECTS) $(BINARY) core.* *~
 
 .PHONY: all clean
