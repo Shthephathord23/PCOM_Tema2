@@ -98,26 +98,60 @@ std::string UdpMessage::formatMessage() {
 
 // --- topicMatches (Unchanged) ---
 bool topicMatches(const std::string& topic, const std::string& pattern) {
-    std::vector<std::string> p_segs, t_segs;
+    std::vector<std::string> t_segs, p_segs;
     std::string segment;
-    std::stringstream ss_p(pattern); while (getline(ss_p, segment, '/')) p_segs.push_back(segment);
-    std::stringstream ss_t(topic); while (getline(ss_t, segment, '/')) t_segs.push_back(segment);
-    size_t p_idx = 0, t_idx = 0;
-    while (p_idx < p_segs.size() && t_idx < t_segs.size()) {
-        if (p_segs[p_idx] == "+") { p_idx++; t_idx++; }
-        else if (p_segs[p_idx] == "*") {
-            p_idx++; if (p_idx == p_segs.size()) return true;
-            while (t_idx < t_segs.size()) {
-                 std::string rem_t, rem_p;
-                 for(size_t i = t_idx; i < t_segs.size(); ++i) rem_t += (i > t_idx ? "/" : "") + t_segs[i];
-                 for(size_t i = p_idx; i < p_segs.size(); ++i) rem_p += (i > p_idx ? "/" : "") + p_segs[i];
-                 if (topicMatches(rem_t, rem_p)) return true;
-                 t_idx++;
-            } return false;
-        } else { if (p_segs[p_idx] != t_segs[t_idx]) return false; p_idx++; t_idx++; }
+    std::stringstream ss_t(topic);
+    while (getline(ss_t, segment, '/')) {
+        t_segs.push_back(segment);
     }
-    if (t_idx == t_segs.size() && p_idx < p_segs.size() && p_segs[p_idx] == "*" && p_idx == p_segs.size() - 1) p_idx++;
-    return p_idx == p_segs.size() && t_idx == t_segs.size();
+    std::stringstream ss_p(pattern);
+    while (getline(ss_p, segment, '/')) {
+        p_segs.push_back(segment);
+    }
+
+    size_t N = t_segs.size();
+    size_t M = p_segs.size();
+
+    // 2. Create DP rows (size M+1 for base cases)
+    std::vector<bool> prev_dp(M + 1, false);
+    std::vector<bool> curr_dp(M + 1, false);
+
+    // 3. Base Case: Initialize prev_dp (representing dp[0][j])
+    prev_dp[0] = true;
+    for (size_t j = 1; j <= M; ++j) {
+        if (p_segs[j - 1] == "*") {
+            prev_dp[j] = prev_dp[j - 1];
+        }
+        // else prev_dp[j] remains false
+    }
+
+    // 4. Fill the "Table" Row by Row
+    for (size_t i = 1; i <= N; ++i) {
+        // Base case for the current row: dp[i][0] is always false for i > 0
+        curr_dp[0] = false;
+        for (size_t j = 1; j <= M; ++j) {
+            const std::string& p_seg = p_segs[j - 1];
+            const std::string& t_seg = t_segs[i - 1];
+
+            if (p_seg == "+") {
+                curr_dp[j] = prev_dp[j - 1];
+            } else if (p_seg == "*") {
+                // '*' can match zero segments (use curr_dp[j-1])
+                // or '*' can match the current segment t_seg (use prev_dp[j])
+                curr_dp[j] = curr_dp[j - 1] || prev_dp[j];
+            } else {
+                // Literal match required
+                curr_dp[j] = (p_seg == t_seg) && prev_dp[j - 1];
+            }
+        }
+        // Update prev_dp for the next iteration
+        prev_dp = curr_dp;
+        // Optional: clear curr_dp if needed, depends on loop structure
+        // std::fill(curr_dp.begin(), curr_dp.end(), false); // Or rely on overwrite
+    }
+
+    // 5. Result is the last element of the last computed row (stored in prev_dp)
+    return prev_dp[M];
 }
 
 
