@@ -41,7 +41,7 @@ struct UdpMessage {
     struct sockaddr_in sender_addr;
     int content_len; // Actual length of content received
 
-    std::string parseMessage();
+    std::string formatMessage();
 };
 
 // --- Function Declarations ---

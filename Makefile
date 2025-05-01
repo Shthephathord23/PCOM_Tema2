@@ -1,6 +1,6 @@
 CXX := g++
 CPPFLAGS := -Iinclude
-CXXFLAGS := -Wall -Wextra -g -std=c++11 -fPIC
+CXXFLAGS := -Wall -Wextra -g -std=c++17 -fPIC
 LDFLAGS := -lm
 
 SRC_DIR := src

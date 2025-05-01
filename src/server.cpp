@@ -1,395 +1,276 @@
+// File: ../../src/server.cpp
 #include "server.h"
-#include <algorithm> // For std::min
+#include <algorithm> // For std::min, std::find_if
 #include <cstdio>   // For setvbuf
 #include <cstdlib>  // For atoi, exit
 #include <csignal>  // For signal handling (related to EINTR)
 
-// --- Function Implementations ---
+// --- Type Definitions ---
+using PollFds = std::vector<struct pollfd>;
+using SubscribersMap = std::map<std::string, Subscriber>;
+using SocketToIdMap = std::map<int, std::string>;
 
-// topicMatches remains the same
-bool topicMatches(const std::string& topic, const std::string& pattern) {
-    // ... (implementation unchanged) ...
-    std::vector<std::string> p_segs, t_segs;
-    std::string segment;
-    std::stringstream ss_p(pattern);
-    while (getline(ss_p, segment, '/')) p_segs.push_back(segment);
-    std::stringstream ss_t(topic);
-    while (getline(ss_t, segment, '/')) t_segs.push_back(segment);
+// --- Forward Declarations ---
 
-    size_t p_idx = 0, t_idx = 0;
-    while (p_idx < p_segs.size() && t_idx < t_segs.size()) {
-        if (p_segs[p_idx] == "+") {
-            // '+' matches exactly one segment
-            p_idx++;
-            t_idx++;
-        } else if (p_segs[p_idx] == "*") {
-            // '*' matches zero or more segments
-            p_idx++;
-            if (p_idx == p_segs.size()) return true; // '*' at end matches rest
+// --- Socket Setup ---
+struct ServerSockets { int tcp = -1; int udp = -1; };
+static ServerSockets setup_server_sockets(int port);
+static void close_server_sockets(const ServerSockets& sockets);
 
-            // Try matching remaining pattern against remaining topic segments
-            while (t_idx < t_segs.size()) {
-                 // Construct remaining topic/pattern strings for recursive-like check
-                 std::string remaining_topic = "";
-                 for(size_t i = t_idx; i < t_segs.size(); ++i) remaining_topic += (i > t_idx ? "/" : "") + t_segs[i];
-                 std::string remaining_pattern = "";
-                 for(size_t i = p_idx; i < p_segs.size(); ++i) remaining_pattern += (i > p_idx ? "/" : "") + p_segs[i];
+// --- Poll Initialization ---
+static void initialize_poll_fds(PollFds& poll_fds, const ServerSockets& sockets);
 
-                 if (topicMatches(remaining_topic, remaining_pattern)) {
-                     return true;
-                 }
-                 t_idx++; // '*' consumes one segment, try again
-            }
-            return false; // Ran out of topic segments to match remaining pattern
-        } else {
-            // Segments must match exactly
-            if (p_segs[p_idx] != t_segs[t_idx]) return false;
-            p_idx++;
-            t_idx++;
-        }
-    }
+// --- Main Loop Event Handlers ---
+static void handle_stdin(bool& running);
+static void handle_new_connection(int listener_socket, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
+static void handle_udp_message(int udp_socket, SubscribersMap& subscribers);
+static void handle_client_activity(PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
 
-    // Handle trailing '*' matching zero segments
-    if (t_idx == t_segs.size() && p_idx < p_segs.size() && p_segs[p_idx] == "*" && p_idx == p_segs.size() - 1) {
-        p_idx++;
-    }
+// --- Client Connection Helpers ---
+static bool receive_client_id(int client_socket, std::string& client_id_str);
+static void handle_reconnection(Subscriber& sub, int new_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SocketToIdMap& socket_to_id);
+static void handle_new_client(const std::string& client_id, int client_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
+static void send_stored_messages(Subscriber& sub);
 
-    // Both pattern and topic must be fully consumed for a match
-    return p_idx == p_segs.size() && t_idx == t_segs.size();
-}
+// --- Client Activity Helpers ---
+static void handle_client_disconnection(int client_socket, size_t poll_index, const std::string& client_id, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
+static bool process_client_data(Subscriber& sub);
+static bool process_commands_from_buffer(Subscriber& sub);
+static void parse_and_execute_command(Subscriber& sub, const std::string& command_line);
 
-// UdpMessage::parseMessage remains the same
-std::string UdpMessage::parseMessage() {
-    // ... (implementation unchanged) ...
-    std::stringstream result_ss; // Use stringstream for easier formatting
+// --- UDP Message Helpers ---
+static bool parse_udp_datagram(const char* buffer, int bytes_received, UdpMessage& udp_msg);
+static void distribute_udp_message(const UdpMessage& msg, const std::string& formatted_msg, SubscribersMap& subscribers);
 
-    // Add IP and port of sender
+// --- UdpMessage Method (Moved from header, Renamed for clarity) ---
+std::string UdpMessage::formatMessage() {
+    std::stringstream result_ss;
     char sender_ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(this->sender_addr.sin_addr), sender_ip, INET_ADDRSTRLEN);
     result_ss << sender_ip << ":" << ntohs(this->sender_addr.sin_port) << " - ";
-
-    // Add topic
     result_ss << this->topic << " - ";
 
-    // Parse content based on type
     switch(this->type) {
-        case 0: {  // INT
-            if (this->content_len < 5) { // Need 1 byte sign + 4 bytes value
-                 result_ss << "INT - INVALID DATA";
-                 break;
-            }
-            uint8_t sign_byte = this->content[0];
-            uint32_t net_value;
-            memcpy(&net_value, this->content + 1, sizeof(uint32_t)); // Copy value after sign byte
-            int value = ntohl(net_value); // Convert from network byte order
-            if (sign_byte == 1) {
-                value = -value; // Apply sign
-            } else if (sign_byte != 0) {
-                result_ss << "INT - INVALID SIGN BYTE";
-                break;
-            }
-            result_ss << "INT - " << value;
+        case 0: { // INT
+            if (this->content_len < 5) { result_ss << "INT - INVALID DATA"; break; }
+            uint8_t sign = this->content[0];
+            uint32_t net_val; memcpy(&net_val, this->content + 1, 4);
+            int val = ntohl(net_val);
+            if (sign == 1) val = -val;
+            else if (sign != 0) { result_ss << "INT - INVALID SIGN BYTE"; break; }
+            result_ss << "INT - " << val;
             break;
         }
-        case 1: {  // SHORT_REAL
-             if (this->content_len < 2) { // Need 2 bytes value
-                 result_ss << "SHORT_REAL - INVALID DATA";
-                 break;
-            }
-            uint16_t net_value;
-            memcpy(&net_value, this->content, sizeof(uint16_t));
-            float value = ntohs(net_value) / 100.0f; // Convert and scale
-            // Format to two decimal places, ensuring trailing zeros if needed
-            result_ss << "SHORT_REAL - " << std::fixed << std::setprecision(2) << value;
-            result_ss.unsetf(std::ios_base::floatfield); // Reset float formatting
+        case 1: { // SHORT_REAL
+            if (this->content_len < 2) { result_ss << "SHORT_REAL - INVALID DATA"; break; }
+            uint16_t net_val; memcpy(&net_val, this->content, 2);
+            float val = ntohs(net_val) / 100.0f;
+            result_ss << "SHORT_REAL - " << std::fixed << std::setprecision(2) << val;
+            result_ss.unsetf(std::ios_base::floatfield);
             break;
         }
-        case 2: {  // FLOAT
-             if (this->content_len < 6) { // Need 1 byte sign + 4 bytes value + 1 byte power
-                 result_ss << "FLOAT - INVALID DATA";
-                 break;
-             }
-             uint8_t sign_byte = this->content[0];
-             uint32_t net_value;
-             memcpy(&net_value, this->content + 1, sizeof(uint32_t));
-             uint8_t power_byte = this->content[5];
-
-             double value = ntohl(net_value);
-             if (power_byte > 0) {
-                 value *= pow(10.0, -static_cast<double>(power_byte));
-             }
-
-             if (sign_byte == 1) {
-                 value = -value;
-             } else if (sign_byte != 0) {
-                 result_ss << "FLOAT - INVALID SIGN BYTE";
-                 break;
-             }
-             // Print exactly power_byte decimals
-             result_ss << "FLOAT - "
-                       << std::fixed << std::setprecision(power_byte)
-                       << value;
-             // Reset floatfield so it doesn't leak into next prints
-             result_ss.unsetf(std::ios_base::floatfield);
-             break;
+        case 2: { // FLOAT
+            if (this->content_len < 6) { result_ss << "FLOAT - INVALID DATA"; break; }
+            uint8_t sign = this->content[0];
+            uint32_t net_val; memcpy(&net_val, this->content + 1, 4);
+            uint8_t power = this->content[5];
+            double val = ntohl(net_val);
+            if (power > 0) val *= pow(10.0, -static_cast<double>(power));
+            if (sign == 1) val = -val;
+            else if (sign != 0) { result_ss << "FLOAT - INVALID SIGN BYTE"; break; }
+            result_ss << "FLOAT - " << std::fixed << std::setprecision(power) << val;
+            result_ss.unsetf(std::ios_base::floatfield);
+            break;
         }
-        case 3: {  // STRING
-            char string_content[MAX_CONTENT_SIZE + 1];
-            int len_to_copy = std::min(this->content_len, MAX_CONTENT_SIZE);
-            memcpy(string_content, this->content, len_to_copy);
-            string_content[len_to_copy] = '\0';
-            result_ss << "STRING - " << string_content;
+        case 3: { // STRING
+            char str_content[MAX_CONTENT_SIZE + 1];
+            int len = std::min(this->content_len, MAX_CONTENT_SIZE);
+            memcpy(str_content, this->content, len);
+            str_content[len] = '\0';
+            result_ss << "STRING - " << str_content;
             break;
         }
         default:
             result_ss << "UNKNOWN TYPE (" << (int)this->type << ")";
     }
-
     return result_ss.str();
 }
 
-static void handle_stdin(bool& running);
-static void handle_new_connection(int tcp_socket,
-                                  std::vector<struct pollfd>& poll_fds,
-                                  std::map<std::string, Subscriber>& subscribers,
-                                  std::map<int, std::string>& socket_to_id);
-static void handle_udp_message(int udp_socket,
-                               std::map<std::string, Subscriber>& subscribers);
-static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
-                                   std::map<std::string, Subscriber>& subscribers,
-                                   std::map<int, std::string>& socket_to_id);
+// --- topicMatches (Unchanged) ---
+bool topicMatches(const std::string& topic, const std::string& pattern) {
+    std::vector<std::string> p_segs, t_segs;
+    std::string segment;
+    std::stringstream ss_p(pattern); while (getline(ss_p, segment, '/')) p_segs.push_back(segment);
+    std::stringstream ss_t(topic); while (getline(ss_t, segment, '/')) t_segs.push_back(segment);
+    size_t p_idx = 0, t_idx = 0;
+    while (p_idx < p_segs.size() && t_idx < t_segs.size()) {
+        if (p_segs[p_idx] == "+") { p_idx++; t_idx++; }
+        else if (p_segs[p_idx] == "*") {
+            p_idx++; if (p_idx == p_segs.size()) return true;
+            while (t_idx < t_segs.size()) {
+                 std::string rem_t, rem_p;
+                 for(size_t i = t_idx; i < t_segs.size(); ++i) rem_t += (i > t_idx ? "/" : "") + t_segs[i];
+                 for(size_t i = p_idx; i < p_segs.size(); ++i) rem_p += (i > p_idx ? "/" : "") + p_segs[i];
+                 if (topicMatches(rem_t, rem_p)) return true;
+                 t_idx++;
+            } return false;
+        } else { if (p_segs[p_idx] != t_segs[t_idx]) return false; p_idx++; t_idx++; }
+    }
+    if (t_idx == t_segs.size() && p_idx < p_segs.size() && p_segs[p_idx] == "*" && p_idx == p_segs.size() - 1) p_idx++;
+    return p_idx == p_segs.size() && t_idx == t_segs.size();
+}
+
 
 // --- Main Server Logic ---
-// main remains the same
 int main(int argc, char *argv[]) {
-    // ... (implementation unchanged) ...
-    // Disable stdout buffering for immediate output
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <PORT>" << std::endl;
         return 1;
     }
-
     int port = atoi(argv[1]);
-    if (port <= 0 || port > 65535) { // Basic port validation
-         std::cerr << "ERROR: Invalid port number." << std::endl;
-         return 1;
+    if (port <= 0 || port > 65535) {
+        std::cerr << "ERROR: Invalid port number." << std::endl;
+        return 1;
     }
 
-    // --- Socket Creation and Setup ---
-    int tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (tcp_socket < 0) error("ERROR opening TCP socket");
+    ServerSockets sockets = setup_server_sockets(port);
+    if (sockets.tcp < 0 || sockets.udp < 0) return 1; // setup logs errors
 
-    int udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (udp_socket < 0) error("ERROR opening UDP socket");
-
-    // Allow address reuse for quicker restarts
-    int enable = 1;
-    if (setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
-        error("ERROR setting SO_REUSEADDR on TCP");
-    if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
-        error("ERROR setting SO_REUSEADDR on UDP");
-
-    // Server address configuration
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = INADDR_ANY; // Listen on all interfaces
-
-    // Bind sockets
-    if (bind(tcp_socket, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0)
-        error("ERROR binding TCP socket");
-    if (bind(udp_socket, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0)
-        error("ERROR binding UDP socket");
-
-    // Listen for TCP connections
-    if (listen(tcp_socket, MAX_CLIENTS) < 0) error("ERROR on listen");
-
+    if (listen(sockets.tcp, MAX_CLIENTS) < 0) {
+        close_server_sockets(sockets);
+        error("ERROR on listen");
+    }
     std::cerr << "Server started on port " << port << std::endl;
 
-    // --- Data Structures ---
-    std::map<std::string, Subscriber> subscribers; // Map ID to Subscriber struct
-    std::vector<struct pollfd> poll_fds;           // File descriptors for polling
-    std::map<int, std::string> socket_to_id;       // Map socket fd to client ID
+    SubscribersMap subscribers;
+    PollFds poll_fds;
+    SocketToIdMap socket_to_id;
 
-    // Add initial sockets to poll set
-    poll_fds.push_back({tcp_socket, POLLIN, 0});   // TCP listening [index 0]
-    poll_fds.push_back({udp_socket, POLLIN, 0});   // UDP socket [index 1]
-    poll_fds.push_back({STDIN_FILENO, POLLIN, 0}); // Standard input [index 2]
+    initialize_poll_fds(poll_fds, sockets);
 
     bool running = true;
-
-    // --- Main Server Loop ---
     while (running) {
-        // Wait for events
         int poll_count = poll(poll_fds.data(), poll_fds.size(), -1);
-        if (poll_count < 0) {
-            if (errno == EINTR) continue; // Interrupted by signal
-            error("ERROR on poll");
-        }
+        if (poll_count < 0) { if (errno == EINTR) continue; error("ERROR on poll"); }
 
-        // Check STDIN [index 2]
-        if (poll_fds[2].revents & POLLIN) {
-            handle_stdin(running);
-            if (!running) break; // Exit immediately if requested
-        }
+        // Order: Check stdin first, then listeners, then clients
+        if (poll_fds[2].revents & POLLIN) { handle_stdin(running); if (!running) break; }
+        if (poll_fds[0].revents & POLLIN) { handle_new_connection(sockets.tcp, poll_fds, subscribers, socket_to_id); }
+        if (poll_fds[1].revents & POLLIN) { handle_udp_message(sockets.udp, subscribers); }
+        handle_client_activity(poll_fds, subscribers, socket_to_id); // Check indices >= 3
 
-        // Check TCP listener [index 0]
-        if (poll_fds[0].revents & POLLIN) {
-            handle_new_connection(tcp_socket, poll_fds, subscribers, socket_to_id);
-        }
-
-        // Check UDP socket [index 1]
-        if (poll_fds[1].revents & POLLIN) {
-            handle_udp_message(udp_socket, subscribers);
-        }
-
-        // Check client TCP sockets [indices >= 3]
-        handle_client_activity(poll_fds, subscribers, socket_to_id);
-
-        // Clean up revents for the next iteration (important!)
-        for (auto& pfd_entry : poll_fds) {
-            pfd_entry.revents = 0;
-        }
-    } // End main while loop (running)
-
-    // --- Server Shutdown ---
-    // Close all client sockets first (indices >= 3)
-    for (size_t i = 3; i < poll_fds.size(); ++i) {
-         close(poll_fds[i].fd);
+        // Reset revents (can be done within handlers too, but less error prone here)
+        for (auto& pfd_entry : poll_fds) pfd_entry.revents = 0;
     }
-    // Close listening/UDP sockets
-    close(tcp_socket);
-    close(udp_socket);
 
+    close_server_sockets(sockets); // Close listening sockets
+    // Client sockets are closed by handle_client_disconnection or implicitly here if server exits first
     // Optional: Message indicating shutdown completion
     // std::cout << "Server shut down complete." << std::endl;
-
     return 0;
 }
 
-// --- Helper Function Implementations ---
 
-// handle_stdin remains the same
+// --- Socket Setup ---
+static ServerSockets setup_server_sockets(int port) {
+    ServerSockets sockets;
+    int enable = 1;
+    struct sockaddr_in server_addr;
+
+    // TCP Socket
+    sockets.tcp = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockets.tcp < 0) { error("ERROR opening TCP socket"); return sockets; } // error() exits
+    if (setsockopt(sockets.tcp, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+        close(sockets.tcp); error("ERROR setting SO_REUSEADDR on TCP"); return {-1,-1}; }
+
+    // UDP Socket
+    sockets.udp = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockets.udp < 0) { close(sockets.tcp); error("ERROR opening UDP socket"); return {-1,-1}; }
+    if (setsockopt(sockets.udp, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
+        close(sockets.tcp); close(sockets.udp); error("ERROR setting SO_REUSEADDR on UDP"); return {-1,-1}; }
+
+    // Address Configuration
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // Bind Sockets
+    if (bind(sockets.tcp, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
+        close(sockets.tcp); close(sockets.udp); error("ERROR binding TCP socket"); return {-1,-1}; }
+    if (bind(sockets.udp, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
+        close(sockets.tcp); close(sockets.udp); error("ERROR binding UDP socket"); return {-1,-1}; }
+
+    return sockets;
+}
+
+static void close_server_sockets(const ServerSockets& sockets) {
+    if (sockets.tcp >= 0) close(sockets.tcp);
+    if (sockets.udp >= 0) close(sockets.udp);
+}
+
+// --- Poll Initialization ---
+static void initialize_poll_fds(PollFds& poll_fds, const ServerSockets& sockets) {
+    poll_fds.clear(); // Ensure it's empty before initializing
+    poll_fds.push_back({sockets.tcp, POLLIN, 0});   // TCP listening [index 0]
+    poll_fds.push_back({sockets.udp, POLLIN, 0});   // UDP socket [index 1]
+    poll_fds.push_back({STDIN_FILENO, POLLIN, 0}); // Standard input [index 2]
+}
+
+// --- Main Loop Event Handlers ---
+
+// Handle STDIN commands (only "exit")
 static void handle_stdin(bool& running) {
-    // ... (implementation unchanged) ...
     char buffer[BUFFER_SIZE];
     memset(buffer, 0, BUFFER_SIZE);
     if (fgets(buffer, BUFFER_SIZE - 1, stdin) != NULL) {
-        buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
+        buffer[strcspn(buffer, "\n")] = 0;
         if (strcmp(buffer, "exit") == 0) {
-            running = false; // Signal shutdown
-        } else {
-            // Unknown command (optional: log)
-            // std::cerr << "Unknown command on server stdin: " << buffer << std::endl;
-        }
+            running = false;
+        } // else: ignore unknown commands
     } else {
-        // EOF or error on stdin
-        // std::cerr << "WARN: STDIN closed or error." << std::endl;
-        running = false; // Treat as exit signal
+        // EOF or error on stdin, treat as exit
+        running = false;
     }
 }
 
-// MODIFIED handle_new_connection
-static void handle_new_connection(int tcp_socket,
-                                  std::vector<struct pollfd>& poll_fds,
-                                  std::map<std::string, Subscriber>& subscribers,
-                                  std::map<int, std::string>& socket_to_id)
-{
+// Accept new TCP connection, get client ID, handle connection/reconnection
+static void handle_new_connection(int listener_socket, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    int client_socket = accept(tcp_socket, (struct sockaddr *) &client_addr, &client_len);
-
-    if (client_socket < 0) {
-         perror("WARN: accept failed");
-         return;
-    }
+    int client_socket = accept(listener_socket, (struct sockaddr *) &client_addr, &client_len);
+    if (client_socket < 0) { perror("WARN: accept failed"); return; }
 
     // Disable Nagle's algorithm
     int flag = 1;
     if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int)) < 0)
         perror("WARN: setsockopt TCP_NODELAY failed");
 
-    // Receive client ID
-    char buffer[BUFFER_SIZE]; // Use common buffer size
-    memset(buffer, 0, BUFFER_SIZE);
-    int bytes_received = recv(client_socket, buffer, MAX_ID_SIZE + 1, 0); // Read ID + potential null
-
-    if (bytes_received <= 0) {
-        // std::cerr << "WARN: Failed to receive client ID or client disconnected." << std::endl;
+    std::string client_id_str;
+    if (!receive_client_id(client_socket, client_id_str)) {
+        // std::cerr << "WARN: Failed to receive client ID or client disconnected early." << std::endl;
         close(client_socket);
         return;
     }
 
-    buffer[std::min(bytes_received, MAX_ID_SIZE)] = '\0'; // Ensure null termination within limits
-    std::string client_id_str(buffer);
-
-    // --- Client Connection Logic ---
     auto it = subscribers.find(client_id_str);
     if (it != subscribers.end()) { // ID exists
-        if (it->second.connected) { // Already connected?
+        if (it->second.connected) {
             std::cout << "Client " << client_id_str << " already connected." << std::endl;
-            close(client_socket);
-        } else { // Reconnection
-            char client_ip_str[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
-            std::cout << "New client " << client_id_str << " connected from "
-                      << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
-
-            // Update the existing subscriber object IN PLACE
-            it->second.socket = client_socket;
-            it->second.connected = true;
-            it->second.command_buffer.reset(); // Reset buffer
-            poll_fds.push_back({client_socket, POLLIN, 0}); // Add to poll set
-            socket_to_id[client_socket] = client_id_str; // Update map (this map is fine)
-
-            // Send stored messages (SF)
-            for (const std::string& stored_msg : it->second.stored_messages) {
-                ssize_t sent = send_all(client_socket, stored_msg.c_str(), stored_msg.length() + 1, MSG_NOSIGNAL);
-                if (sent < 0 || (size_t)sent != stored_msg.length() + 1) {
-                    perror("WARN: send stored message failed during reconnect");
-                    break;
-                }
-            }
-            it->second.stored_messages.clear(); // Clear after attempting send
+            close(client_socket); // Close the new socket, keep the old one
+        } else {
+            handle_reconnection(it->second, client_socket, client_addr, poll_fds, socket_to_id);
         }
     } else { // New client ID
-        // <<< CORRECTED LOGIC for new client >>>
-        // Use operator[]: If client_id_str is new, it default-constructs
-        // a Subscriber IN PLACE in the map and returns a reference.
-        // If it somehow already existed (shouldn't happen due to find check),
-        // it returns a reference to the existing one.
-        Subscriber& new_map_sub = subscribers[client_id_str];
-
-        // Now populate the fields of the subscriber object *already in the map*
-        char client_ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
-        std::cout << "New client " << client_id_str << " connected from "
-                  << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
-
-        strncpy(new_map_sub.id, client_id_str.c_str(), MAX_ID_SIZE);
-        new_map_sub.id[MAX_ID_SIZE] = '\0'; // Ensure null termination
-        new_map_sub.socket = client_socket;
-        new_map_sub.connected = true;
-        // new_map_sub.command_buffer was already initialized by the default
-        // constructor when operator[] created the element in the map.
-        // No need to reset it here.
-
-        // Add to other structures
-        poll_fds.push_back({client_socket, POLLIN, 0}); // Add to poll set
-        socket_to_id[client_socket] = client_id_str; // Add to socket->ID map (this map is fine)
-        // <<< END CORRECTED LOGIC >>>
+        handle_new_client(client_id_str, client_socket, client_addr, poll_fds, subscribers, socket_to_id);
     }
-
 }
 
-// handle_udp_message remains the same
-static void handle_udp_message(int udp_socket,
-                               std::map<std::string, Subscriber>& subscribers) {
-    // ... (implementation unchanged) ...
-    char buffer[BUFFER_SIZE]; // Use common buffer size
+// Receive UDP message, parse it, and distribute to subscribers
+static void handle_udp_message(int udp_socket, SubscribersMap& subscribers) {
+    char buffer[BUFFER_SIZE];
     UdpMessage udp_msg;
     struct sockaddr_in udp_sender_addr;
     socklen_t udp_sender_len = sizeof(udp_sender_addr);
@@ -397,134 +278,66 @@ static void handle_udp_message(int udp_socket,
     memset(buffer, 0, BUFFER_SIZE);
     int bytes_received = recvfrom(udp_socket, buffer, BUFFER_SIZE - 1, 0,
                                 (struct sockaddr *) &udp_sender_addr, &udp_sender_len);
-
     if (bytes_received <= 0) {
         if (bytes_received < 0) perror("WARN: recvfrom UDP failed");
-        return; // Nothing received or error
+        return;
     }
 
-    // Basic validation: must have topic (min 1 char) + type byte + content (min 0)
-    // The UDP format is topic[50] + type[1] + content[1500]
-    if (bytes_received < (TOPIC_SIZE + 1)) {
-        // std::cerr << "WARN: Received UDP message too short (less than topic+type)." << std::endl;
-        // The original code had a similar check but allowed processing. Let's stick to that.
-        // However, ensure we don't read past the received bytes.
+    // Populate UdpMessage struct from raw bytes
+    if (!parse_udp_datagram(buffer, bytes_received, udp_msg)) {
+        // std::cerr << "WARN: Received invalid UDP message format." << std::endl;
+        return;
     }
-
-    // Populate UdpMessage struct
-    memset(&udp_msg, 0, sizeof(UdpMessage));
-    // Copy topic carefully, ensuring null termination within TOPIC_SIZE
-    int topic_len_to_copy = std::min(bytes_received, TOPIC_SIZE);
-    memcpy(udp_msg.topic, buffer, topic_len_to_copy);
-    udp_msg.topic[topic_len_to_copy < TOPIC_SIZE ? topic_len_to_copy : TOPIC_SIZE] = '\0'; // Ensure null term
-
-    // Check if we have enough bytes for the type
-    if (bytes_received < TOPIC_SIZE + 1) {
-         // std::cerr << "WARN: UDP message too short to contain type byte." << std::endl;
-         return; // Cannot process further
-    }
-
-    udp_msg.type = (uint8_t)buffer[TOPIC_SIZE];
-    udp_msg.sender_addr = udp_sender_addr;
-    udp_msg.content_len = bytes_received - (TOPIC_SIZE + 1);
-
-    // Copy content only if content_len is positive and valid
-    if (udp_msg.content_len > 0) {
-        int len_to_copy = std::min(udp_msg.content_len, MAX_CONTENT_SIZE);
-        memcpy(udp_msg.content, buffer + TOPIC_SIZE + 1, len_to_copy);
-        // Ensure null termination for string safety, although binary data might not need it
-        udp_msg.content[std::min(len_to_copy, MAX_CONTENT_SIZE)] = '\0';
-    } else {
-        udp_msg.content_len = 0;
-        udp_msg.content[0] = '\0';
-    }
+    udp_msg.sender_addr = udp_sender_addr; // Store sender address
 
     // Format the message string once
-    std::string formatted_msg_str = udp_msg.parseMessage();
-    std::string topic_str(udp_msg.topic);
+    std::string formatted_msg_str = udp_msg.formatMessage();
 
-    // --- Distribute message to relevant subscribers ---
-    for (auto& pair : subscribers) {
-        Subscriber& sub = pair.second;
-        // Find if any subscription matches
-        for (const auto& topic_pair : sub.topics) {
-            const std::string& pattern = topic_pair.first;
-            bool sf_enabled = topic_pair.second;
-
-            if (topicMatches(topic_str, pattern)) {
-                if (sub.connected) { // Send if connected
-                    // Send message + null terminator
-                    // Use send_all for robustness, though original used send
-                    ssize_t sent = send_all(sub.socket, formatted_msg_str.c_str(), formatted_msg_str.length() + 1, MSG_NOSIGNAL);
-                     if (sent < 0 || (size_t)sent != formatted_msg_str.length() + 1) {
-                        // Error sending, probably disconnected
-                        if (errno != EPIPE && errno != ECONNRESET) { // EPIPE/ECONNRESET common on disconnect
-                            perror("WARN: send_all to subscriber failed");
-                        }
-                        // Let the main poll loop handle the disconnect detection
-                    }
-                } else if (sf_enabled) { // Store if SF=1 and disconnected
-                    sub.stored_messages.push_back(formatted_msg_str);
-                }
-                // else: Matched, but disconnected and SF=0 -> Message dropped for this sub
-
-                // Optimization: Once a matching pattern is found for a subscriber,
-                // send/store/drop it and move to the next subscriber.
-                // A subscriber receives a message at most once per UDP datagram.
-                goto next_subscriber; // Use goto for clarity in breaking outer loop
-            }
-        } // End loop through subscriber's topics
-        next_subscriber:; // Label for goto
-    } // End loop through subscribers
+    // Distribute message to relevant subscribers
+    distribute_udp_message(udp_msg, formatted_msg_str, subscribers);
 }
 
 
-// MODIFIED handle_client_activity
-static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
-                                   std::map<std::string, Subscriber>& subscribers,
-                                   std::map<int, std::string>& socket_to_id)
-{
-    char recv_tmp_buffer[BUFFER_SIZE]; // <<< Use a temporary buffer for recv
+// Iterate through client sockets, check for activity (data/disconnect)
+static void handle_client_activity(PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
+    char recv_tmp_buffer[BUFFER_SIZE]; // Temporary buffer for recv
 
-    // Iterate backwards to allow safe removal from poll_fds using erase
+    // Iterate backwards for safe removal from poll_fds
     for (int i = poll_fds.size() - 1; i >= 3; --i) {
-        // Check if index is still valid after potential erasures
-        if (i >= (int)poll_fds.size()) continue;
+        // Check index validity (might change due to removals) - already handled by loop condition and check below
+         if (i >= (int)poll_fds.size()) continue;
 
         struct pollfd& pfd = poll_fds[i];
         int client_socket = pfd.fd;
 
-        // Skip if no event for this fd in this poll cycle
-        if (pfd.revents == 0) continue;
+        if (pfd.revents == 0) continue; // Skip sockets with no activity
 
-        // Find the subscriber associated with this socket
         auto id_it = socket_to_id.find(client_socket);
-        Subscriber* sub_ptr = nullptr;
-        std::string client_id_str = "";
-        if (id_it != socket_to_id.end()) {
-            client_id_str = id_it->second;
-            auto sub_it = subscribers.find(client_id_str);
-            if (sub_it != subscribers.end()) {
-                sub_ptr = &sub_it->second;
-            }
+        if (id_it == socket_to_id.end()) {
+             // Should not happen if maps are consistent, indicates an issue
+             // std::cerr << "WARN: No client ID found for active socket fd " << client_socket << ". Closing." << std::endl;
+             close(client_socket);
+             poll_fds.erase(poll_fds.begin() + i);
+             continue;
         }
+        std::string client_id_str = id_it->second;
+        auto sub_it = subscribers.find(client_id_str);
+        if (sub_it == subscribers.end()) {
+            // Should not happen if maps are consistent
+            // std::cerr << "WARN: No subscriber object found for client ID " << client_id_str << ". Closing." << std::endl;
+            close(client_socket);
+            socket_to_id.erase(id_it); // Remove from socket map too
+            poll_fds.erase(poll_fds.begin() + i);
+            continue;
+        }
+        Subscriber& sub = sub_it->second;
 
         bool client_disconnected = false;
 
-        if (!sub_ptr) {
-            // Client ID not found for this socket, should not happen if maps are consistent
-            // std::cerr << "WARN: No subscriber found for active socket fd " << client_socket << std::endl;
-            client_disconnected = true; // Treat as error, close it
-            goto cleanup; // Skip to cleanup
-        }
-
         // Handle disconnection/error first
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-             if (sub_ptr->connected) { // Check if already marked disconnected
+            if (sub.connected) { // Check if we haven't already marked it disconnected
                 std::cout << "Client " << client_id_str << " disconnected (poll error/hup)." << std::endl;
-                sub_ptr->connected = false;
-                sub_ptr->socket = -1;
-                sub_ptr->command_buffer.reset(); // <<< MODIFIED: Reset buffer
             }
             client_disconnected = true;
         }
@@ -533,94 +346,282 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
             memset(recv_tmp_buffer, 0, BUFFER_SIZE); // Clear temp buffer
             int bytes_received = recv(client_socket, recv_tmp_buffer, BUFFER_SIZE - 1, 0);
 
-            if (bytes_received <= 0) { // Disconnection or error
-                if (bytes_received < 0 && errno != ECONNRESET) { // ECONNRESET is common for disconnect
-                     perror("WARN: recv from client failed");
+            if (bytes_received <= 0) { // Disconnection or recv error
+                if (bytes_received < 0 && errno != ECONNRESET && errno != EINTR) {
+                    perror("WARN: recv from client failed");
                 }
-
-                if (sub_ptr->connected) {
-                    std::cout << "Client " << client_id_str << " disconnected." << std::endl;
-                    sub_ptr->connected = false;
-                    sub_ptr->socket = -1;
-                    sub_ptr->command_buffer.reset(); // <<< MODIFIED: Reset buffer
-                }
+                 if (sub.connected) { // Log only if not already known disconnected
+                     std::cout << "Client " << client_id_str << " disconnected." << std::endl;
+                 }
                 client_disconnected = true;
-
-            } else { // Received data from client
-                 // <<< MODIFIED: Use Circular Buffer >>>
-                // Write received data into the client's circular buffer
-                if (!sub_ptr->command_buffer.write(recv_tmp_buffer, bytes_received)) {
-                    // Buffer full! This indicates a problem (e.g., client flooding server).
+            } else { // Received data
+                // Write to buffer and process commands
+                if (!sub.command_buffer.write(recv_tmp_buffer, bytes_received)) {
                     std::cerr << "ERROR: Client " << client_id_str << " command buffer overflow. Disconnecting." << std::endl;
-                    // Optionally log more details
                     client_disconnected = true; // Disconnect misbehaving client
-                    // command_buffer state is now potentially corrupt, reset it on disconnect below
-                } else {
-                    // Process complete commands (delimited by newline) from the buffer
-                    ssize_t newline_offset; // Use ssize_t for find result (-1 if not found)
-                    while ((newline_offset = sub_ptr->command_buffer.find('\n')) >= 0) {
-                        // Extract command line up to (but not including) newline
-                        // newline_offset is the length of the command string
-                        std::string command_line = sub_ptr->command_buffer.substr(0, newline_offset);
-
-                        // Consume the command line AND the newline delimiter from the buffer
-                        sub_ptr->command_buffer.consume(newline_offset + 1);
-
-                        // Trim whitespace (optional but robust) - NO CHANGE HERE
-                        command_line.erase(0, command_line.find_first_not_of(" \t\r\n"));
-                        command_line.erase(command_line.find_last_not_of(" \t\r\n") + 1);
-
-                        if (command_line.empty()) continue;
-
-                        // Parse command - NO CHANGE IN PARSING LOGIC
-                        std::stringstream ss(command_line);
-                        std::string command_verb;
-                        ss >> command_verb;
-
-                        if (command_verb == "subscribe") {
-                            std::string topic;
-                            int sf = -1;
-                            if (ss >> topic >> sf && (sf == 0 || sf == 1) && ss.eof()) {
-                                if (topic.length() > TOPIC_SIZE) {
-                                    // std::cerr << "WARN: Client " << client_id_str << " oversized topic subscribe." << std::endl;
-                                } else {
-                                    sub_ptr->topics[topic] = (sf == 1);
-                                }
-                            } else {
-                                 // std::cerr << "WARN: Client " << client_id_str << " invalid subscribe format: " << command_line << std::endl;
-                            }
-                        } else if (command_verb == "unsubscribe") {
-                            std::string topic;
-                            if (ss >> topic && ss.eof()) {
-                                if (topic.length() > TOPIC_SIZE) {
-                                    // std::cerr << "WARN: Client " << client_id_str << " oversized topic unsubscribe." << std::endl;
-                                } else {
-                                    sub_ptr->topics.erase(topic); // erase returns 0 if key not found
-                                }
-                            } else {
-                                // std::cerr << "WARN: Client " << client_id_str << " invalid unsubscribe format: " << command_line << std::endl;
-                            }
-                        } else {
-                             // std::cerr << "WARN: Client " << client_id_str << " unknown command: " << command_verb << std::endl;
-                        }
-                    } // End while processing commands from buffer
-                } // End if buffer write successful
-                // <<< END MODIFIED SECTION >>>
-            } // End handling received data
-        } // End handling POLLIN
-
-        cleanup:;    // Cleanup label for goto
-        // Cleanup if client disconnected or error occurred
-        if (client_disconnected) {
-            close(client_socket);
-            if (sub_ptr && !sub_ptr->connected && sub_ptr->socket != -1) {
-                // Ensure buffer is reset if disconnect happened before POLLIN handler reset it
-                sub_ptr->command_buffer.reset();
+                } else if (!process_commands_from_buffer(sub)) {
+                    // Error during command processing (though current parser doesn't signal errors this way)
+                    // If needed, add error handling here. For now, assume success.
+                }
             }
-            if (id_it != socket_to_id.end()) socket_to_id.erase(id_it); // Remove from socket map
-            poll_fds.erase(poll_fds.begin() + i); // Remove from poll set
-            // Continue to next fd index (loop handles index decrement)
-        }
+        } // End POLLIN handling
 
+        // Cleanup if client disconnected
+        if (client_disconnected) {
+            handle_client_disconnection(client_socket, i, client_id_str, poll_fds, subscribers, socket_to_id);
+            // The loop continues to the next index (decremented automatically by `i--`)
+        }
     } // End loop through client sockets
+}
+
+// --- Client Connection Helpers ---
+
+// Receives and validates the client ID string
+static bool receive_client_id(int client_socket, std::string& client_id_str) {
+    char buffer[BUFFER_SIZE]; // Use common buffer size
+    memset(buffer, 0, BUFFER_SIZE);
+    // Expect ID + null terminator. Read slightly more to detect overflow attempts.
+    int bytes_received = recv(client_socket, buffer, MAX_ID_SIZE + 1, 0);
+
+    if (bytes_received <= 0) { // Error or disconnect
+        return false;
+    }
+    // Ensure received ID is null-terminated within buffer & max size
+    buffer[std::min(bytes_received, MAX_ID_SIZE)] = '\0';
+
+    // Check if ID contains problematic characters (like newline or null before end)
+    if (strcspn(buffer, "\n\r\0") != (size_t)strlen(buffer)) {
+         // std::cerr << "WARN: Client ID contains invalid characters." << std::endl;
+         return false;
+    }
+     // Check if the actual ID length (before null) exceeds max size
+    if (strlen(buffer) > MAX_ID_SIZE) {
+        // std::cerr << "WARN: Received client ID exceeds max length." << std::endl;
+        return false; // ID too long
+    }
+
+
+    client_id_str = buffer;
+    return true;
+}
+
+// Handles a client reconnecting with an existing ID
+static void handle_reconnection(Subscriber& sub, int new_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SocketToIdMap& socket_to_id) {
+    char client_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
+    std::cout << "New client " << sub.id << " connected from "
+              << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
+
+    // Update the subscriber object
+    sub.socket = new_socket;
+    sub.connected = true;
+    sub.command_buffer.reset(); // Clear any old command fragments
+
+    // Add new socket to poll set and map
+    poll_fds.push_back({new_socket, POLLIN, 0});
+    socket_to_id[new_socket] = sub.id;
+
+    // Send stored messages
+    send_stored_messages(sub);
+    sub.stored_messages.clear(); // Clear after attempting send
+}
+
+// Handles a new client connecting for the first time
+static void handle_new_client(const std::string& client_id, int client_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
+    char client_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
+    std::cout << "New client " << client_id << " connected from "
+              << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
+
+    // Create and insert the new subscriber using operator[] which default-constructs
+    Subscriber& new_sub = subscribers[client_id];
+
+    // Populate the fields
+    strncpy(new_sub.id, client_id.c_str(), MAX_ID_SIZE);
+    new_sub.id[MAX_ID_SIZE] = '\0'; // Ensure null termination
+    new_sub.socket = client_socket;
+    new_sub.connected = true;
+    // command_buffer is already initialized by the constructor
+
+    // Add to poll set and map
+    poll_fds.push_back({client_socket, POLLIN, 0});
+    socket_to_id[client_socket] = client_id;
+}
+
+// Sends messages stored for SF=1 clients upon reconnection
+static void send_stored_messages(Subscriber& sub) {
+    for (const std::string& stored_msg : sub.stored_messages) {
+        // Send message + null terminator
+        ssize_t sent = send_all(sub.socket, stored_msg.c_str(), stored_msg.length() + 1, MSG_NOSIGNAL);
+        if (sent < 0 || (size_t)sent != stored_msg.length() + 1) {
+            if (errno != EPIPE && errno != ECONNRESET) {
+                perror("WARN: send stored message failed during reconnect");
+            }
+            // If send fails, stop sending more stored messages for this client now
+            break;
+        }
+    }
+}
+
+// --- Client Activity Helpers ---
+
+// Cleans up resources associated with a disconnected client
+static void handle_client_disconnection(int client_socket, size_t poll_index, const std::string& client_id, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
+    close(client_socket);
+
+    auto sub_it = subscribers.find(client_id);
+    if (sub_it != subscribers.end()) {
+        sub_it->second.connected = false;
+        sub_it->second.socket = -1;
+        sub_it->second.command_buffer.reset(); // Clear buffer on disconnect
+        // Keep sub_it->second.topics and sub_it->second.stored_messages for potential reconnect
+    }
+
+    socket_to_id.erase(client_socket); // Erase using socket FD as key
+    poll_fds.erase(poll_fds.begin() + poll_index); // Erase using index
+}
+
+// Reads data from client socket into buffer and processes complete commands
+// Returns true if processing was successful, false if buffer write failed.
+static bool process_client_data(Subscriber& sub) {
+    // Note: This function is integrated into handle_client_activity now.
+    // Reading into a temporary buffer happens there.
+    // This function's role is now just processing commands from the buffer.
+    return process_commands_from_buffer(sub);
+}
+
+// Processes newline-delimited commands from the subscriber's buffer
+// Returns true (always, in current implementation)
+static bool process_commands_from_buffer(Subscriber& sub) {
+    ssize_t newline_offset;
+    while ((newline_offset = sub.command_buffer.find('\n')) >= 0) {
+        // Extract command line up to (but not including) newline
+        std::string command_line = sub.command_buffer.substr(0, newline_offset);
+
+        // Consume the command line AND the newline delimiter
+        sub.command_buffer.consume(newline_offset + 1);
+
+        // Trim whitespace (optional but robust)
+        command_line.erase(0, command_line.find_first_not_of(" \t\r\n"));
+        command_line.erase(command_line.find_last_not_of(" \t\r\n") + 1);
+
+        if (command_line.empty()) continue;
+
+        parse_and_execute_command(sub, command_line);
+    }
+    return true; // Indicate success (no buffer errors detected here)
+}
+
+// Parses a single command line and updates subscriber state
+static void parse_and_execute_command(Subscriber& sub, const std::string& command_line) {
+    std::stringstream ss(command_line);
+    std::string command_verb;
+    ss >> command_verb;
+
+    if (command_verb == "subscribe") {
+        std::string topic;
+        int sf = -1; // Use -1 to detect missing SF value
+        if (ss >> topic >> sf && (sf == 0 || sf == 1) && ss.eof()) {
+            if (topic.length() > TOPIC_SIZE) {
+                // Warn or ignore oversized topic
+                // std::cerr << "WARN: Client " << sub.id << " oversized topic subscribe: " << topic << std::endl;
+            } else {
+                sub.topics[topic] = (sf == 1);
+            }
+        } else {
+            // Warn about invalid format
+            // std::cerr << "WARN: Client " << sub.id << " invalid subscribe format: " << command_line << std::endl;
+        }
+    } else if (command_verb == "unsubscribe") {
+        std::string topic;
+        if (ss >> topic && ss.eof()) {
+             if (topic.length() > TOPIC_SIZE) {
+                // Warn or ignore oversized topic
+                // std::cerr << "WARN: Client " << sub.id << " oversized topic unsubscribe: " << topic << std::endl;
+            } else {
+                 sub.topics.erase(topic); // OK if topic doesn't exist
+            }
+        } else {
+            // Warn about invalid format
+            // std::cerr << "WARN: Client " << sub.id << " invalid unsubscribe format: " << command_line << std::endl;
+        }
+    } else {
+        // Warn about unknown command
+        // std::cerr << "WARN: Client " << sub.id << " unknown command: " << command_verb << std::endl;
+    }
+}
+
+// --- UDP Message Helpers ---
+
+// Parses the raw UDP datagram into the UdpMessage struct
+static bool parse_udp_datagram(const char* buffer, int bytes_received, UdpMessage& udp_msg) {
+    memset(&udp_msg, 0, sizeof(UdpMessage)); // Zero out the structure first
+
+    // Topic is first TOPIC_SIZE bytes
+    int topic_len_to_copy = std::min(bytes_received, TOPIC_SIZE);
+    memcpy(udp_msg.topic, buffer, topic_len_to_copy);
+    // Ensure null termination, even if topic fills TOPIC_SIZE exactly
+    udp_msg.topic[std::min(topic_len_to_copy, TOPIC_SIZE)] = '\0';
+
+    // Type byte is immediately after the topic space
+    if (bytes_received < (TOPIC_SIZE + 1)) {
+        return false; // Message too short for topic + type
+    }
+    udp_msg.type = (uint8_t)buffer[TOPIC_SIZE];
+
+    // Content starts after topic and type
+    udp_msg.content_len = bytes_received - (TOPIC_SIZE + 1);
+    if (udp_msg.content_len < 0) udp_msg.content_len = 0; // Should not happen if previous check passed
+
+    // Copy content, ensuring not to overflow MAX_CONTENT_SIZE
+    if (udp_msg.content_len > 0) {
+        int content_len_to_copy = std::min(udp_msg.content_len, MAX_CONTENT_SIZE);
+        memcpy(udp_msg.content, buffer + TOPIC_SIZE + 1, content_len_to_copy);
+        // Add null terminator for safety (useful for STRING type, harmless for others)
+        udp_msg.content[std::min(content_len_to_copy, MAX_CONTENT_SIZE)] = '\0';
+    } else {
+        udp_msg.content[0] = '\0'; // Ensure content is null-terminated if empty
+    }
+     // Update content_len to reflect potentially truncated content
+    udp_msg.content_len = std::min(udp_msg.content_len, MAX_CONTENT_SIZE);
+
+
+    return true; // Successfully parsed
+}
+
+// Sends the formatted UDP message to matching subscribers
+static void distribute_udp_message(const UdpMessage& msg, const std::string& formatted_msg, SubscribersMap& subscribers) {
+    std::string topic_str(msg.topic);
+
+    for (auto& pair : subscribers) {
+        Subscriber& sub = pair.second;
+        bool matched = false; // Track if *any* pattern matched for this subscriber
+
+        for (const auto& topic_pair : sub.topics) {
+            const std::string& pattern = topic_pair.first;
+            bool sf_enabled = topic_pair.second;
+
+            if (topicMatches(topic_str, pattern)) {
+                matched = true; // A pattern matched
+                if (sub.connected) {
+                    ssize_t sent = send_all(sub.socket, formatted_msg.c_str(), formatted_msg.length() + 1, MSG_NOSIGNAL);
+                    if (sent < 0 || (size_t)sent != formatted_msg.length() + 1) {
+                         if (errno != EPIPE && errno != ECONNRESET) {
+                             perror("WARN: send_all to subscriber failed");
+                         }
+                         // Let the main poll loop detect and handle the disconnect.
+                    }
+                } else if (sf_enabled) {
+                    sub.stored_messages.push_back(formatted_msg);
+                }
+                // else: Matched, but disconnected and SF=0 -> Drop message
+
+                // Important: Break inner loop once a match is found for this subscriber.
+                // A subscriber receives the message at most once per UDP datagram.
+                break;
+            } // end if topicMatches
+        } // end loop through subscriber's topic patterns
+
+        // No need for goto, the inner loop break serves the purpose.
+    } // end loop through subscribers
 }
