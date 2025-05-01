@@ -2,6 +2,7 @@
 #define SERVER_H
 
 #include "common.h" // Include shared definitions
+#include "circular_buffer.h" // <<< Include Circular Buffer
 #include <map>
 #include <set>
 #include <vector>
@@ -25,7 +26,11 @@ struct Subscriber {
     std::map<std::string, bool> topics;  // Map: Topic Pattern -> SF flag
     std::vector<std::string> stored_messages; // For store-and-forward
     bool connected = false;
-    std::string command_buffer; // Buffer for incoming commands from this client
+    // std::string command_buffer; // <<< REMOVED
+    CircularBuffer<char> command_buffer; // <<< ADDED: Buffer for incoming commands
+
+    // <<< ADDED: Constructor to initialize circular buffer
+    Subscriber() : command_buffer(2 * BUFFER_SIZE) {} // Initialize with common buffer size
 };
 
 // Structure for holding parsed UDP message data

@@ -2,13 +2,15 @@
 #define CIRCULAR_BUFFER_H
 
 #include <vector>
+#include <string> // Include for std::string
 #include <sys/types.h> // For size_t
 #include <vector>  // For peek_string
 
 // Basic circular buffer for character data
+template <typename T>
 class CircularBuffer {
 private:
-    std::vector<char> buffer;
+    std::vector<T> buffer;
     size_t head;       // Index of the next write position
     size_t tail;       // Index of the next read position
     size_t count;      // Number of elements currently in the buffer
@@ -27,7 +29,8 @@ public:
     size_t read(char* data, size_t len);      // Returns bytes actually read
     ssize_t find(char delimiter);             // Returns offset from tail, or -1 if not found
     size_t peek(char* data, size_t offset, size_t len); // Returns bytes peeked
-    std::vector<char> peek_bytes(size_t offset, size_t len); // Helper to peek into a vector
+    std::vector<T> peek_bytes(size_t offset, size_t len); // Helper to peek into a vector
+    std::string substr(size_t offset, size_t len); // Get a string representation without consuming
     void consume(size_t len);                 // Removes 'len' bytes from the front (tail)
 
     // Status
@@ -36,6 +39,7 @@ public:
     bool empty() const;
     bool full() const;
     void reset(); // Clears the buffer state
+    void clear() { reset(); } // Add alias for clarity if used elsewhere
 
 };
 

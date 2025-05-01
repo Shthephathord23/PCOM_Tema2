@@ -2,8 +2,10 @@
 #include <cstring> // For memcpy
 #include <algorithm> // For std::min
 #include <stdexcept> // For invalid_argument
+#include <vector> // Include vector for substr implementation
 
-CircularBuffer::CircularBuffer(size_t cap)
+template <typename T>
+CircularBuffer<T>::CircularBuffer(size_t cap)
     : buffer(cap), head(0), tail(0), count(0), capacity(cap)
 {
     if (cap == 0) {
@@ -11,7 +13,8 @@ CircularBuffer::CircularBuffer(size_t cap)
     }
 }
 
-bool CircularBuffer::write(const char* data, size_t len) {
+template <typename T>
+bool CircularBuffer<T>::write(const char* data, size_t len) {
     if (len == 0) return true; // Nothing to write
     if (len > space_available()) {
         return false; // Not enough space
@@ -33,7 +36,8 @@ bool CircularBuffer::write(const char* data, size_t len) {
     return true;
 }
 
-size_t CircularBuffer::read(char* data, size_t len) {
+template <typename T>
+size_t CircularBuffer<T>::read(char* data, size_t len) {
      if (len == 0) return 0;
 
      size_t read_len = std::min(len, count); // Can only read what's available
@@ -56,7 +60,8 @@ size_t CircularBuffer::read(char* data, size_t len) {
 }
 
 // Returns the offset from the current tail, or -1 if not found
-ssize_t CircularBuffer::find(char delimiter) {
+template <typename T>
+ssize_t CircularBuffer<T>::find(char delimiter) {
     if (count == 0) return -1;
 
     size_t current_pos = tail;
@@ -72,7 +77,8 @@ ssize_t CircularBuffer::find(char delimiter) {
 
 
 // Peeks 'len' bytes starting 'offset' bytes from the tail, returns bytes peeked
-size_t CircularBuffer::peek(char* data, size_t offset, size_t len) {
+template <typename T>
+size_t CircularBuffer<T>::peek(char* data, size_t offset, size_t len) {
      if (len == 0 || offset >= count) return 0;
 
      size_t peek_len = std::min(len, count - offset); // Adjust len to what's actually available after offset
@@ -93,8 +99,9 @@ size_t CircularBuffer::peek(char* data, size_t offset, size_t len) {
 }
 
 // Helper to peek into a vector
-std::vector<char> CircularBuffer::peek_bytes(size_t offset, size_t len) {
-    std::vector<char> result;
+template <typename T>
+std::vector<T> CircularBuffer<T>::peek_bytes(size_t offset, size_t len) {
+    std::vector<T> result;
     if (len == 0 || offset >= count) return result;
 
     size_t peek_len = std::min(len, count - offset);
@@ -105,8 +112,26 @@ std::vector<char> CircularBuffer::peek_bytes(size_t offset, size_t len) {
     return result;
 }
 
+// Creates a std::string from a portion of the buffer without consuming data
+template <typename T>
+std::string CircularBuffer<T>::substr(size_t offset, size_t len) {
+    if (offset >= count || len == 0) {
+        return ""; // Invalid offset or zero length requested
+    }
 
-void CircularBuffer::consume(size_t len) {
+    // Adjust length to not exceed available bytes after offset
+    size_t actual_len = std::min(len, count - offset);
+    if (actual_len == 0) {
+        return "";
+    }
+
+    std::vector<T> temp_buffer = peek_bytes(offset, actual_len);
+    // Construct string directly from vector iterators for efficiency
+    return std::string(temp_buffer.begin(), temp_buffer.end());
+}
+
+template <typename T>
+void CircularBuffer<T>::consume(size_t len) {
     size_t consume_len = std::min(len, count); // Cannot consume more than available
     if (consume_len == 0) return;
 
@@ -114,25 +139,32 @@ void CircularBuffer::consume(size_t len) {
     count -= consume_len;
 }
 
-size_t CircularBuffer::bytes_available() const {
+template <typename T>
+size_t CircularBuffer<T>::bytes_available() const {
     return count;
 }
 
-size_t CircularBuffer::space_available() const {
+template <typename T>
+size_t CircularBuffer<T>::space_available() const {
     return capacity - count;
 }
 
-bool CircularBuffer::empty() const {
+template <typename T>
+bool CircularBuffer<T>::empty() const {
     return count == 0;
 }
 
-bool CircularBuffer::full() const {
+template <typename T>
+bool CircularBuffer<T>::full() const {
     return count == capacity;
 }
 
-void CircularBuffer::reset() {
+template <typename T>
+void CircularBuffer<T>::reset() {
     head = 0;
     tail = 0;
     count = 0;
     // buffer content doesn't need clearing, it will be overwritten
 }
+
+template class CircularBuffer<char>;

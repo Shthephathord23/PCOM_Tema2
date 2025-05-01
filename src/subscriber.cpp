@@ -1,11 +1,12 @@
 #include "subscriber.h"
+#include "circular_buffer.h" // <<< Include Circular Buffer
 #include <cstdio>   // For setvbuf
 #include <cstdlib>  // For atoi, exit
 
-
 // --- Helper function declarations for main logic (optional modularity) ---
 static void handle_user_input(int client_socket, bool& running);
-static void handle_server_message(int client_socket, std::string& server_buffer, bool& running);
+// <<< MODIFIED signature
+static void handle_server_message(int client_socket, CircularBuffer<char>& server_buffer, bool& running);
 
 
 // --- Main Client Logic ---
@@ -53,7 +54,6 @@ int main(int argc, char *argv[]) {
         error("ERROR connecting to server");
 
     // --- Send Client ID ---
-    // Use send_all for robustness (send ID + null terminator)
     if (send_all(client_socket, client_id.c_str(), client_id.length() + 1, 0) < 0) {
         error("ERROR sending client ID"); // send_all prints details via perror
     }
@@ -66,7 +66,8 @@ int main(int argc, char *argv[]) {
     poll_fds[1].fd = client_socket; // Server socket [index 1]
     poll_fds[1].events = POLLIN;
 
-    std::string server_buffer; // Buffer for potentially fragmented messages
+    // std::string server_buffer; // <<< REMOVED
+    CircularBuffer<char> server_buffer(2 * BUFFER_SIZE); // <<< ADDED: Circular buffer for server messages
     bool running = true;
 
     // --- Main Client Loop ---
@@ -85,6 +86,7 @@ int main(int argc, char *argv[]) {
 
         // Check Server Socket [index 1] for data or errors
         if (poll_fds[1].revents & POLLIN) {
+             // <<< MODIFIED: Pass circular buffer
             handle_server_message(client_socket, server_buffer, running);
         } else if (poll_fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
              std::cerr << "ERROR: Server connection error/hangup." << std::endl;
@@ -107,7 +109,9 @@ int main(int argc, char *argv[]) {
 
 // --- Helper Function Implementations ---
 
+// handle_user_input remains the same
 static void handle_user_input(int client_socket, bool& running) {
+    // ... (implementation unchanged) ...
     char buffer[BUFFER_SIZE]; // Use common buffer size
     memset(buffer, 0, BUFFER_SIZE);
     if (fgets(buffer, BUFFER_SIZE - 1, stdin) == NULL) {
@@ -178,32 +182,46 @@ static void handle_user_input(int client_socket, bool& running) {
 }
 
 
-static void handle_server_message(int client_socket, std::string& server_buffer, bool& running) {
-    char buffer[BUFFER_SIZE]; // Use common buffer size
-    memset(buffer, 0, BUFFER_SIZE);
-    int bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+// MODIFIED handle_server_message
+static void handle_server_message(int client_socket, CircularBuffer<char>& server_buffer, bool& running) {
+    char recv_tmp_buffer[BUFFER_SIZE]; // <<< Use a temporary buffer for recv
+    memset(recv_tmp_buffer, 0, BUFFER_SIZE); // Clear temp buffer
+    int bytes_received = recv(client_socket, recv_tmp_buffer, BUFFER_SIZE - 1, 0);
 
     if (bytes_received <= 0) {
         if (bytes_received < 0 && errno != ECONNRESET) {
             perror("ERROR receiving from server");
         }
         // If 0 or error, server has disconnected
+        if (bytes_received == 0) {
+             std::cerr << "Server closed connection." << std::endl;
+        }
         running = false;
         return;
     }
 
-    // Append received data to buffer
-    server_buffer.append(buffer, bytes_received);
+    // <<< MODIFIED: Use Circular Buffer >>>
+    // Write received data into the circular buffer
+    if (!server_buffer.write(recv_tmp_buffer, bytes_received)) {
+         // Buffer full! This means the subscriber isn't processing messages fast enough
+         // or the server sent a massive burst. Treat as fatal error.
+         std::cerr << "ERROR: Subscriber buffer overflow. Server data potentially lost. Disconnecting." << std::endl;
+         running = false;
+         return;
+    }
 
     // Process complete messages (null-terminated) from the buffer
-    size_t null_pos;
-    while ((null_pos = server_buffer.find('\0')) != std::string::npos) {
+    ssize_t null_offset; // Use ssize_t for find result (-1 if not found)
+    while ((null_offset = server_buffer.find('\0')) >= 0) {
          // Extract message up to (but not including) the null terminator
-         std::string message = server_buffer.substr(0, null_pos);
-         // Remove the message and the null terminator from the buffer
-         server_buffer.erase(0, null_pos + 1);
+         // null_offset is the length of the message string
+         std::string message = server_buffer.substr(0, null_offset);
+
+         // Consume the message AND the null terminator from the buffer
+         server_buffer.consume(null_offset + 1);
 
          // Print the received message
          std::cout << message << std::endl;
     }
+    // <<< END MODIFIED SECTION >>>
 }

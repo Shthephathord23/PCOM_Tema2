@@ -6,9 +6,9 @@
 
 // --- Function Implementations ---
 
-// (topicMatches implementation remains the same as in the original file)
+// topicMatches remains the same
 bool topicMatches(const std::string& topic, const std::string& pattern) {
-    // Split pattern and topic by '/'
+    // ... (implementation unchanged) ...
     std::vector<std::string> p_segs, t_segs;
     std::string segment;
     std::stringstream ss_p(pattern);
@@ -58,10 +58,9 @@ bool topicMatches(const std::string& topic, const std::string& pattern) {
     return p_idx == p_segs.size() && t_idx == t_segs.size();
 }
 
-
-// (parseMessage implementation remains the same as in the original file)
-std::string UdpMessage::parseMessage()
-{
+// UdpMessage::parseMessage remains the same
+std::string UdpMessage::parseMessage() {
+    // ... (implementation unchanged) ...
     std::stringstream result_ss; // Use stringstream for easier formatting
 
     // Add IP and port of sender
@@ -161,7 +160,9 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
                                    std::map<int, std::string>& socket_to_id);
 
 // --- Main Server Logic ---
+// main remains the same
 int main(int argc, char *argv[]) {
+    // ... (implementation unchanged) ...
     // Disable stdout buffering for immediate output
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
@@ -271,7 +272,9 @@ int main(int argc, char *argv[]) {
 
 // --- Helper Function Implementations ---
 
+// handle_stdin remains the same
 static void handle_stdin(bool& running) {
+    // ... (implementation unchanged) ...
     char buffer[BUFFER_SIZE];
     memset(buffer, 0, BUFFER_SIZE);
     if (fgets(buffer, BUFFER_SIZE - 1, stdin) != NULL) {
@@ -289,6 +292,7 @@ static void handle_stdin(bool& running) {
     }
 }
 
+// MODIFIED handle_new_connection
 static void handle_new_connection(int tcp_socket,
                                   std::vector<struct pollfd>& poll_fds,
                                   std::map<std::string, Subscriber>& subscribers,
@@ -327,7 +331,6 @@ static void handle_new_connection(int tcp_socket,
     if (it != subscribers.end()) { // ID exists
         if (it->second.connected) { // Already connected?
             std::cout << "Client " << client_id_str << " already connected." << std::endl;
-            // Send error/notification? Spec doesn't require, just close duplicate.
             close(client_socket);
         } else { // Reconnection
             char client_ip_str[INET_ADDRSTRLEN];
@@ -335,47 +338,57 @@ static void handle_new_connection(int tcp_socket,
             std::cout << "New client " << client_id_str << " connected from "
                       << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
 
+            // Update the existing subscriber object IN PLACE
             it->second.socket = client_socket;
             it->second.connected = true;
-            it->second.command_buffer.clear();
+            it->second.command_buffer.reset(); // Reset buffer
             poll_fds.push_back({client_socket, POLLIN, 0}); // Add to poll set
-            socket_to_id[client_socket] = client_id_str; // Update map
+            socket_to_id[client_socket] = client_id_str; // Update map (this map is fine)
 
             // Send stored messages (SF)
             for (const std::string& stored_msg : it->second.stored_messages) {
-                // Use send_all for robustness (although original used send)
-                // Add 1 for the null terminator expected by the client
                 ssize_t sent = send_all(client_socket, stored_msg.c_str(), stored_msg.length() + 1, MSG_NOSIGNAL);
                 if (sent < 0 || (size_t)sent != stored_msg.length() + 1) {
-                    // Error sending, likely client disconnected during send burst
                     perror("WARN: send stored message failed during reconnect");
-                    // Client disconnect will be handled by poll loop, stop sending more
                     break;
                 }
             }
             it->second.stored_messages.clear(); // Clear after attempting send
         }
     } else { // New client ID
+        // <<< CORRECTED LOGIC for new client >>>
+        // Use operator[]: If client_id_str is new, it default-constructs
+        // a Subscriber IN PLACE in the map and returns a reference.
+        // If it somehow already existed (shouldn't happen due to find check),
+        // it returns a reference to the existing one.
+        Subscriber& new_map_sub = subscribers[client_id_str];
+
+        // Now populate the fields of the subscriber object *already in the map*
         char client_ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
         std::cout << "New client " << client_id_str << " connected from "
                   << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
 
-        Subscriber new_sub;
-        strncpy(new_sub.id, client_id_str.c_str(), MAX_ID_SIZE);
-        new_sub.id[MAX_ID_SIZE] = '\0'; // Ensure null termination
-        new_sub.socket = client_socket;
-        new_sub.connected = true;
-        subscribers[client_id_str] = new_sub; // Add to map
+        strncpy(new_map_sub.id, client_id_str.c_str(), MAX_ID_SIZE);
+        new_map_sub.id[MAX_ID_SIZE] = '\0'; // Ensure null termination
+        new_map_sub.socket = client_socket;
+        new_map_sub.connected = true;
+        // new_map_sub.command_buffer was already initialized by the default
+        // constructor when operator[] created the element in the map.
+        // No need to reset it here.
+
+        // Add to other structures
         poll_fds.push_back({client_socket, POLLIN, 0}); // Add to poll set
-        socket_to_id[client_socket] = client_id_str; // Add to socket->ID map
+        socket_to_id[client_socket] = client_id_str; // Add to socket->ID map (this map is fine)
+        // <<< END CORRECTED LOGIC >>>
     }
+
 }
 
-
+// handle_udp_message remains the same
 static void handle_udp_message(int udp_socket,
-                               std::map<std::string, Subscriber>& subscribers)
-{
+                               std::map<std::string, Subscriber>& subscribers) {
+    // ... (implementation unchanged) ...
     char buffer[BUFFER_SIZE]; // Use common buffer size
     UdpMessage udp_msg;
     struct sockaddr_in udp_sender_addr;
@@ -466,11 +479,12 @@ static void handle_udp_message(int udp_socket,
 }
 
 
+// MODIFIED handle_client_activity
 static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
                                    std::map<std::string, Subscriber>& subscribers,
                                    std::map<int, std::string>& socket_to_id)
 {
-    char buffer[BUFFER_SIZE]; // Reusable buffer
+    char recv_tmp_buffer[BUFFER_SIZE]; // <<< Use a temporary buffer for recv
 
     // Iterate backwards to allow safe removal from poll_fds using erase
     for (int i = poll_fds.size() - 1; i >= 3; --i) {
@@ -498,63 +512,67 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
         bool client_disconnected = false;
 
         if (!sub_ptr) {
+            // Client ID not found for this socket, should not happen if maps are consistent
+            // std::cerr << "WARN: No subscriber found for active socket fd " << client_socket << std::endl;
             client_disconnected = true; // Treat as error, close it
             goto cleanup; // Skip to cleanup
         }
 
         // Handle disconnection/error first
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-             if (sub_ptr && sub_ptr->connected) { // Check if already marked disconnected
+             if (sub_ptr->connected) { // Check if already marked disconnected
                 std::cout << "Client " << client_id_str << " disconnected (poll error/hup)." << std::endl;
                 sub_ptr->connected = false;
                 sub_ptr->socket = -1;
-                sub_ptr->command_buffer.clear();
-            } else if (!sub_ptr) {
-                 // std::cerr << "WARN: Poll error/hangup on unknown client socket fd " << client_socket << std::endl;
+                sub_ptr->command_buffer.reset(); // <<< MODIFIED: Reset buffer
             }
             client_disconnected = true;
         }
         // Check for incoming data
         else if (pfd.revents & POLLIN) {
-            memset(buffer, 0, BUFFER_SIZE);
-            int bytes_received = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+            memset(recv_tmp_buffer, 0, BUFFER_SIZE); // Clear temp buffer
+            int bytes_received = recv(client_socket, recv_tmp_buffer, BUFFER_SIZE - 1, 0);
 
             if (bytes_received <= 0) { // Disconnection or error
                 if (bytes_received < 0 && errno != ECONNRESET) { // ECONNRESET is common for disconnect
                      perror("WARN: recv from client failed");
                 }
 
-                if (sub_ptr && sub_ptr->connected) {
+                if (sub_ptr->connected) {
                     std::cout << "Client " << client_id_str << " disconnected." << std::endl;
                     sub_ptr->connected = false;
                     sub_ptr->socket = -1;
-                    sub_ptr->command_buffer.clear();
-                } else if (!sub_ptr) {
-                    // std::cerr << "WARN: Disconnection from unknown socket fd " << client_socket << std::endl;
+                    sub_ptr->command_buffer.reset(); // <<< MODIFIED: Reset buffer
                 }
                 client_disconnected = true;
 
             } else { // Received data from client
-                if (sub_ptr == nullptr) {
-                    // std::cerr << "WARN: Received data from unknown socket fd " << client_socket << std::endl;
-                    client_disconnected = true; // Treat as error, close it
+                 // <<< MODIFIED: Use Circular Buffer >>>
+                // Write received data into the client's circular buffer
+                if (!sub_ptr->command_buffer.write(recv_tmp_buffer, bytes_received)) {
+                    // Buffer full! This indicates a problem (e.g., client flooding server).
+                    std::cerr << "ERROR: Client " << client_id_str << " command buffer overflow. Disconnecting." << std::endl;
+                    // Optionally log more details
+                    client_disconnected = true; // Disconnect misbehaving client
+                    // command_buffer state is now potentially corrupt, reset it on disconnect below
                 } else {
-                    // Append received data to the client's buffer
-                    sub_ptr->command_buffer.append(buffer, bytes_received);
-
                     // Process complete commands (delimited by newline) from the buffer
-                    size_t newline_pos;
-                    while ((newline_pos = sub_ptr->command_buffer.find('\n')) != std::string::npos) {
-                        std::string command_line = sub_ptr->command_buffer.substr(0, newline_pos);
-                        sub_ptr->command_buffer.erase(0, newline_pos + 1);
+                    ssize_t newline_offset; // Use ssize_t for find result (-1 if not found)
+                    while ((newline_offset = sub_ptr->command_buffer.find('\n')) >= 0) {
+                        // Extract command line up to (but not including) newline
+                        // newline_offset is the length of the command string
+                        std::string command_line = sub_ptr->command_buffer.substr(0, newline_offset);
 
-                        // Trim whitespace (optional but robust)
+                        // Consume the command line AND the newline delimiter from the buffer
+                        sub_ptr->command_buffer.consume(newline_offset + 1);
+
+                        // Trim whitespace (optional but robust) - NO CHANGE HERE
                         command_line.erase(0, command_line.find_first_not_of(" \t\r\n"));
                         command_line.erase(command_line.find_last_not_of(" \t\r\n") + 1);
 
                         if (command_line.empty()) continue;
 
-                        // Parse command
+                        // Parse command - NO CHANGE IN PARSING LOGIC
                         std::stringstream ss(command_line);
                         std::string command_verb;
                         ss >> command_verb;
@@ -562,28 +580,22 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
                         if (command_verb == "subscribe") {
                             std::string topic;
                             int sf = -1;
-                            // Format expected: subscribe <TOPIC> <SF>
                             if (ss >> topic >> sf && (sf == 0 || sf == 1) && ss.eof()) {
                                 if (topic.length() > TOPIC_SIZE) {
                                     // std::cerr << "WARN: Client " << client_id_str << " oversized topic subscribe." << std::endl;
                                 } else {
                                     sub_ptr->topics[topic] = (sf == 1);
-                                    // Client prints confirmation
                                 }
                             } else {
                                  // std::cerr << "WARN: Client " << client_id_str << " invalid subscribe format: " << command_line << std::endl;
                             }
                         } else if (command_verb == "unsubscribe") {
                             std::string topic;
-                            // Format expected: unsubscribe <TOPIC>
                             if (ss >> topic && ss.eof()) {
                                 if (topic.length() > TOPIC_SIZE) {
                                     // std::cerr << "WARN: Client " << client_id_str << " oversized topic unsubscribe." << std::endl;
                                 } else {
-                                    if (sub_ptr->topics.erase(topic) == 0) {
-                                         // std::cerr << "WARN: Client " << client_id_str << " unsubscribe non-subscribed topic: " << topic << std::endl;
-                                    }
-                                    // Client prints confirmation
+                                    sub_ptr->topics.erase(topic); // erase returns 0 if key not found
                                 }
                             } else {
                                 // std::cerr << "WARN: Client " << client_id_str << " invalid unsubscribe format: " << command_line << std::endl;
@@ -592,7 +604,8 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
                              // std::cerr << "WARN: Client " << client_id_str << " unknown command: " << command_verb << std::endl;
                         }
                     } // End while processing commands from buffer
-                } // End if sub_ptr != nullptr
+                } // End if buffer write successful
+                // <<< END MODIFIED SECTION >>>
             } // End handling received data
         } // End handling POLLIN
 
@@ -600,8 +613,12 @@ static void handle_client_activity(std::vector<struct pollfd>& poll_fds,
         // Cleanup if client disconnected or error occurred
         if (client_disconnected) {
             close(client_socket);
-            if (id_it != socket_to_id.end()) socket_to_id.erase(id_it);
-            poll_fds.erase(poll_fds.begin() + i);
+            if (sub_ptr && !sub_ptr->connected && sub_ptr->socket != -1) {
+                // Ensure buffer is reset if disconnect happened before POLLIN handler reset it
+                sub_ptr->command_buffer.reset();
+            }
+            if (id_it != socket_to_id.end()) socket_to_id.erase(id_it); // Remove from socket map
+            poll_fds.erase(poll_fds.begin() + i); // Remove from poll set
             // Continue to next fd index (loop handles index decrement)
         }
 
