@@ -26,7 +26,6 @@ struct Subscriber {
     std::map<std::string, bool> topics;  // Map: Topic Pattern -> SF flag
     std::vector<std::string> stored_messages; // For store-and-forward
     bool connected = false;
-    // std::string command_buffer; // <<< REMOVED
     CircularBuffer<char> command_buffer; // <<< ADDED: Buffer for incoming commands
 
     // <<< ADDED: Constructor to initialize circular buffer
