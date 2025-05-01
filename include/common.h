@@ -15,10 +15,10 @@
 #include <errno.h>
 
 // --- Constants ---
-#define BUFFER_SIZE 1600    // Buffer size for receiving messages (used by both)
-#define TOPIC_SIZE 50       // Maximum length of a topic name (used/validated by both)
+#define BUFFER_SIZE 1600      // Buffer size for receiving messages (used by both)
+#define TOPIC_SIZE 50         // Maximum length of a topic name (used/validated by both)
 #define MAX_CONTENT_SIZE 1500 // Maximum length of UDP message content (server parsing, subscriber info)
-#define MAX_ID_SIZE 10      // Maximum length of a client ID (used/validated by both)
+#define MAX_ID_SIZE 10        // Maximum length of a client ID (used/validated by both)
 
 // --- Error Handling ---
 // Prints error message based on errno and exits.

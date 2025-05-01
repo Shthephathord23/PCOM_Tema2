@@ -50,6 +50,7 @@
         "streambuf": "cpp",
         "typeinfo": "cpp",
         "csignal": "cpp",
-        "optional": "cpp"
+        "optional": "cpp",
+        "fstream": "cpp"
     }
 }

@@ -1,0 +1,13 @@
+Checks: '-*,readability-braces-around-statements'
+WarningsAsErrors: '*'
+CheckOptions:
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '0'   # force braces even on one‐line bodies
+
+ExtraArgs:  
+  # first tell the parser “this is C++”,
+  # then give it a C++ standard and your include path
+  - '-x'
+  - 'c++'
+  - '-std=c++17'
+  - '-Iinclude'

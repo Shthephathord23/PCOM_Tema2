@@ -1,0 +1,2 @@
+BasedOnStyle: LLVM       # or Google, Mozilla, etc.
+PointerAlignment: Left   # produces “int* ptr;” instead of “int *ptr;”
