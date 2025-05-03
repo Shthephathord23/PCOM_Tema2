@@ -80,7 +80,6 @@ static bool parse_arguments(int argc, char *argv[], std::string &client_id, std:
     
     return true;
 }
-
 static int setup_and_connect(const std::string &server_ip, int server_port)
 {
     int client_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -116,7 +115,6 @@ static int setup_and_connect(const std::string &server_ip, int server_port)
     
     return client_socket;
 }
-
 static bool send_client_id(int client_socket, const std::string &client_id)
 {
     if (send_all(client_socket, client_id.c_str(), client_id.length() + 1, 0) < 0)
@@ -127,7 +125,6 @@ static bool send_client_id(int client_socket, const std::string &client_id)
     
     return true;
 }
-
 static void initialize_poll_fds(std::vector<struct pollfd> &poll_fds, int client_socket)
 {
     poll_fds[0].fd = STDIN_FILENO;
@@ -500,14 +497,12 @@ static void deserialize_and_process_message(CircularBuffer<char> &data_buffer)
             {
                 throw std::runtime_error("Payload too small for IP");
             }
-
             uint32_t net_ip;
             memcpy(&net_ip, payload_data_ptr + current_offset, sizeof(uint32_t));
             current_offset += sizeof(uint32_t);
             struct in_addr ip_addr;
             ip_addr.s_addr = net_ip;
             char ip_buffer[INET_ADDRSTRLEN];
-
             if (inet_ntop(AF_INET, &ip_addr, ip_buffer, INET_ADDRSTRLEN))
             {
                 sender_ip_str = ip_buffer;
@@ -517,7 +512,6 @@ static void deserialize_and_process_message(CircularBuffer<char> &data_buffer)
             {
                 throw std::runtime_error("Payload too small for Port");
             }
-
             uint16_t net_port;
             memcpy(&net_port, payload_data_ptr + current_offset, sizeof(uint16_t));
             sender_port = ntohs(net_port);
@@ -527,16 +521,13 @@ static void deserialize_and_process_message(CircularBuffer<char> &data_buffer)
             {
                 throw std::runtime_error("Payload too small for Topic Len");
             }
-
             uint8_t topic_len;
             memcpy(&topic_len, payload_data_ptr + current_offset, sizeof(uint8_t));
             current_offset += sizeof(uint8_t);
-
             if (topic_len > total_payload_len - current_offset)
             {
                 throw std::runtime_error("Topic length exceeds remaining payload");
             }
-
             topic.assign(payload_data_ptr + current_offset, topic_len);
             current_offset += topic_len;
 
@@ -544,7 +535,6 @@ static void deserialize_and_process_message(CircularBuffer<char> &data_buffer)
             {
                 throw std::runtime_error("Payload too small for UDP Type");
             }
-
             memcpy(&udp_type, payload_data_ptr + current_offset, sizeof(uint8_t));
             current_offset += sizeof(uint8_t);
 
@@ -552,17 +542,14 @@ static void deserialize_and_process_message(CircularBuffer<char> &data_buffer)
             {
                 throw std::runtime_error("Payload too small for Content Len");
             }
-
             uint16_t net_content_len;
             memcpy(&net_content_len, payload_data_ptr + current_offset, sizeof(uint16_t));
             content_len = ntohs(net_content_len);
             current_offset += sizeof(uint16_t);
-
             if (content_len > total_payload_len - current_offset)
             {
                 throw std::runtime_error("Content length exceeds remaining payload");
             }
-            
             content_data_ptr = payload_data_ptr + current_offset;
 
             std::string formatted_output = format_received_message(sender_ip_str, sender_port, topic, udp_type, content_data_ptr, content_len);

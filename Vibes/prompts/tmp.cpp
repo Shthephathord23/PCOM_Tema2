@@ -50,10 +50,6 @@ int main()
         }
     }
 
-    file << "in server.cpp the function handle_udp_message loops through two hashmaps: subscribers and sub.topics. Do you think you can keep a hashmap but with the elements reversed so you can reduce the time complexity?\n"
-            "Can you make the topicMatches even more efficient? Maybe use a trie? I don't know if it is a good ideea, but make it more efficient.\n"
-            "Do not change the the messages of the logs\n"
-            "Do not use global variables\n"
-            "AND WHATEVER YOU DO DO NOT CHANGE THE FUNCTIONALITY OF THE CODE\n";
+    file << "make a documentation of the code in README.md format. Be verbose\n";
     return 0;
 }

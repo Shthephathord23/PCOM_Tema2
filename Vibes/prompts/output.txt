@@ -17,17 +17,14 @@ Contents of ../../include/common.h:
 #include <errno.h>
 
 // --- Constants ---
-#define BUFFER_SIZE 1600    // Buffer size for receiving messages (used by both)
-#define TOPIC_SIZE 50       // Maximum length of a topic name (used/validated by both)
-#define MAX_CONTENT_SIZE 1500 // Maximum length of UDP message content (server parsing, subscriber info)
-#define MAX_ID_SIZE 10      // Maximum length of a client ID (used/validated by both)
+#define BUFFER_SIZE 1600
+#define CIRCULAR_BUFFER_SIZE (4 * BUFFER_SIZE)
+#define TOPIC_SIZE 50
+#define MAX_CONTENT_SIZE 1500
+#define MAX_ID_SIZE 10
 
-// --- Error Handling ---
-// Prints error message based on errno and exits.
 void error(const char *msg);
 
-// --- Utility Functions (Potentially reusable) ---
-// Helper function to send data reliably over a socket.
 ssize_t send_all(int sockfd, const void *buf, size_t len, int flags);
 
 #endif // COMMON_H```
@@ -39,45 +36,45 @@ Contents of ../../include/circular_buffer.h:
 #define CIRCULAR_BUFFER_H
 
 #include <vector>
-#include <string> // Include for std::string
+#include <string>      // Include for std::string
 #include <sys/types.h> // For size_t
-#include <vector>  // For peek_string
+#include <vector>      // For peek_string
 
 // Basic circular buffer for character data
 template <typename T>
-class CircularBuffer {
+class CircularBuffer
+{
 private:
     std::vector<T> buffer;
-    size_t head;       // Index of the next write position
-    size_t tail;       // Index of the next read position
-    size_t count;      // Number of elements currently in the buffer
-    size_t capacity;   // Total capacity of the buffer
+    size_t head;     // Index of the next write position
+    size_t tail;     // Index of the next read position
+    size_t count;    // Number of elements currently in the buffer
+    size_t capacity; // Total capacity of the buffer
 
 public:
     // Constructor
     explicit CircularBuffer(size_t cap);
 
     // Disable copy and assignment
-    CircularBuffer(const CircularBuffer&) = delete;
-    CircularBuffer& operator=(const CircularBuffer&) = delete;
+    CircularBuffer(const CircularBuffer &) = delete;
+    CircularBuffer &operator=(const CircularBuffer &) = delete;
 
     // Basic operations
-    bool write(const char* data, size_t len); // Returns false if buffer is full
-    size_t read(char* data, size_t len);      // Returns bytes actually read
-    ssize_t find(char delimiter);             // Returns offset from tail, or -1 if not found
-    size_t peek(char* data, size_t offset, size_t len); // Returns bytes peeked
+    bool write(const char *data, size_t len);             // Returns false if buffer is full
+    size_t read(char *data, size_t len);                  // Returns bytes actually read
+    ssize_t find(char delimiter);                         // Returns offset from tail, or -1 if not found
+    size_t peek(char *data, size_t offset, size_t len);   // Returns bytes peeked
     std::vector<T> peek_bytes(size_t offset, size_t len); // Helper to peek into a vector
-    std::string substr(size_t offset, size_t len); // Get a string representation without consuming
-    void consume(size_t len);                 // Removes 'len' bytes from the front (tail)
+    std::string substr(size_t offset, size_t len);        // Get a string representation without consuming
+    void consume(size_t len);                             // Removes 'len' bytes from the front (tail)
 
     // Status
     size_t bytes_available() const;
     size_t space_available() const;
     bool empty() const;
     bool full() const;
-    void reset(); // Clears the buffer state
+    void reset();             // Clears the buffer state
     void clear() { reset(); } // Add alias for clarity if used elsewhere
-
 };
 
 #endif // CIRCULAR_BUFFER_H```
@@ -106,57 +103,40 @@ Contents of ../../include/server.h:
 #ifndef SERVER_H
 #define SERVER_H
 
-#include "common.h" // Include shared definitions
-#include "circular_buffer.h" // <<< Include Circular Buffer
+#include "common.h"
+#include "circular_buffer.h"
 #include <map>
 #include <set>
 #include <vector>
 #include <string>
-#include <netinet/tcp.h> // For TCP_NODELAY
-#include <cmath>         // For pow in parseMessage (REMOVED - formatting moved)
-#include <iomanip>       // For setprecision in parseMessage (REMOVED - formatting moved)
-#include <netdb.h>       // Potentially needed for gethostbyname etc. (though not used directly now)
-#include <climits>       // Potentially needed for limits (though not used directly now)
+#include <netinet/tcp.h>
+#include <cmath>
+#include <iomanip>
+#include <netdb.h>
+#include <climits>
 
+#define MAX_CLIENTS 100
 
-// --- Server Specific Constants ---
-#define MAX_CLIENTS 100     // Maximum concurrent TCP clients
-
-// --- Structures ---
-
-// Structure to represent a TCP client (subscriber)
-struct Subscriber {
-    int socket = -1; // Initialize socket to invalid
+struct Subscriber
+{
+    int socket = -1;
     char id[MAX_ID_SIZE + 1];
-    std::map<std::string, bool> topics;  // Map: Topic Pattern -> SF flag
-    // <<< MODIFIED: Store raw serialized message packets
-    std::vector<std::vector<char>> stored_messages; // For store-and-forward
+    std::map<std::string, bool> topics; // Map: Topic Pattern -> SF flag
+    std::vector<std::vector<char>> stored_messages;
     bool connected = false;
-    CircularBuffer<char> command_buffer; // Buffer for incoming commands
+    CircularBuffer<char> command_buffer;
 
-    // Constructor to initialize circular buffer
-    Subscriber() : command_buffer(2 * BUFFER_SIZE) {} // Initialize with common buffer size
+    Subscriber() : command_buffer(CIRCULAR_BUFFER_SIZE) {}
 };
 
-// Structure for holding parsed UDP message data
-struct UdpMessage {
-    char topic[TOPIC_SIZE + 1]; // Null terminated topic
+struct UdpMessage
+{
+    char topic[TOPIC_SIZE + 1];
     uint8_t type;
-    char content[MAX_CONTENT_SIZE + 1]; // Raw content + potential null terminator space
+    char content[MAX_CONTENT_SIZE + 1];
     struct sockaddr_in sender_addr;
-    int content_len; // Actual length of content received
-
-    // <<< REMOVED: formatMessage() is now handled by subscriber
-    // std::string formatMessage();
+    int content_len;
 };
-
-// --- Function Declarations ---
-
-// Function to match a topic against a pattern (with wildcards '+' and '*')
-bool topicMatches(const std::string& topic, const std::string& pattern);
-
-// <<< REMOVED: Function to parse UDP message content and format it into a string for subscribers
-// std::string parseMessage(const UdpMessage& msg);
 
 #endif // SERVER_H```
 
@@ -167,29 +147,37 @@ Contents of ../../lib/common.cpp:
 #include <cstdio>  // For perror
 #include <cstdlib> // For exit
 
-void error(const char *msg) {
+void error(const char *msg)
+{
     perror(msg);
     exit(EXIT_FAILURE);
 }
 
 // Implementation of send_all
-ssize_t send_all(int sockfd, const void *buf, size_t len, int flags) {
+ssize_t send_all(int sockfd, const void *buf, size_t len, int flags)
+{
     size_t total = 0;
-    const char *ptr = (const char*) buf;
-    while(total < len) {
+    const char *ptr = (const char *)buf;
+    while (total < len)
+    {
         ssize_t bytes_sent = send(sockfd, ptr + total, len - total, flags);
-        if(bytes_sent < 0) {
+        if (bytes_sent < 0)
+        {
             // If interrupted by signal, try again
-            if (errno == EINTR) continue;
+            if (errno == EINTR)
+            {
+                continue;
+            }
             // Other errors are fatal for this send operation
             perror("send_all failed"); // Print error
-            return -1; // Indicate error
+            return -1;                 // Indicate error
         }
-        if (bytes_sent == 0) {
-             // Socket closed or error? Should not happen with blocking sockets unless len was 0.
-             // This indicates an issue, return bytes sent so far.
-             std::cerr << "WARN: send returned 0" << std::endl;
-             return total;
+        if (bytes_sent == 0)
+        {
+            // Socket closed or error? Should not happen with blocking sockets unless len was 0.
+            // This indicates an issue, return bytes sent so far.
+            std::cerr << "WARN: send returned 0" << std::endl;
+            return total;
         }
         total += bytes_sent;
     }
@@ -201,24 +189,30 @@ ssize_t send_all(int sockfd, const void *buf, size_t len, int flags) {
 Contents of ../../lib/circular_buffer.cpp:
 ```c++
 #include "circular_buffer.h"
-#include <cstring> // For memcpy
+#include <cstring>   // For memcpy
 #include <algorithm> // For std::min
 #include <stdexcept> // For invalid_argument
-#include <vector> // Include vector for substr implementation
+#include <vector>    // Include vector for substr implementation
 
 template <typename T>
 CircularBuffer<T>::CircularBuffer(size_t cap)
     : buffer(cap), head(0), tail(0), count(0), capacity(cap)
 {
-    if (cap == 0) {
+    if (cap == 0)
+    {
         throw std::invalid_argument("CircularBuffer capacity cannot be zero.");
     }
 }
 
 template <typename T>
-bool CircularBuffer<T>::write(const char* data, size_t len) {
-    if (len == 0) return true; // Nothing to write
-    if (len > space_available()) {
+bool CircularBuffer<T>::write(const char *data, size_t len)
+{
+    if (len == 0)
+    {
+        return true; // Nothing to write
+    }
+    if (len > space_available())
+    {
         return false; // Not enough space
     }
 
@@ -229,7 +223,8 @@ bool CircularBuffer<T>::write(const char* data, size_t len) {
     memcpy(buffer.data() + head, data, part1_len);
     head = (head + part1_len) % capacity;
 
-    if (part1_len < len) {
+    if (part1_len < len)
+    {
         size_t part2_len = len - part1_len;
         memcpy(buffer.data() + head, data + part1_len, part2_len);
         head = (head + part2_len) % capacity;
@@ -239,36 +234,50 @@ bool CircularBuffer<T>::write(const char* data, size_t len) {
 }
 
 template <typename T>
-size_t CircularBuffer<T>::read(char* data, size_t len) {
-     if (len == 0) return 0;
+size_t CircularBuffer<T>::read(char *data, size_t len)
+{
+    if (len == 0)
+    {
+        return 0;
+    }
 
-     size_t read_len = std::min(len, count); // Can only read what's available
-     if (read_len == 0) return 0; // Nothing available
+    size_t read_len = std::min(len, count); // Can only read what's available
+    if (read_len == 0)
+    {
+        return 0; // Nothing available
+    }
 
-     // Read in possibly two parts
-     size_t part1_len = std::min(read_len, capacity - tail);
-     memcpy(data, buffer.data() + tail, part1_len);
-     tail = (tail + part1_len) % capacity;
-     count -= part1_len;
+    // Read in possibly two parts
+    size_t part1_len = std::min(read_len, capacity - tail);
+    memcpy(data, buffer.data() + tail, part1_len);
+    tail = (tail + part1_len) % capacity;
+    count -= part1_len;
 
-     if (part1_len < read_len) {
-         size_t part2_len = read_len - part1_len;
-         memcpy(data + part1_len, buffer.data() + tail, part2_len);
-         tail = (tail + part2_len) % capacity;
-         count -= part2_len;
-     }
+    if (part1_len < read_len)
+    {
+        size_t part2_len = read_len - part1_len;
+        memcpy(data + part1_len, buffer.data() + tail, part2_len);
+        tail = (tail + part2_len) % capacity;
+        count -= part2_len;
+    }
 
-     return read_len;
+    return read_len;
 }
 
 // Returns the offset from the current tail, or -1 if not found
 template <typename T>
-ssize_t CircularBuffer<T>::find(char delimiter) {
-    if (count == 0) return -1;
+ssize_t CircularBuffer<T>::find(char delimiter)
+{
+    if (count == 0)
+    {
+        return -1;
+    }
 
     size_t current_pos = tail;
-    for (size_t i = 0; i < count; ++i) {
-        if (buffer[current_pos] == delimiter) {
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (buffer[current_pos] == delimiter)
+        {
             return static_cast<ssize_t>(i); // Found at offset i from tail
         }
         current_pos = (current_pos + 1) % capacity;
@@ -277,37 +286,51 @@ ssize_t CircularBuffer<T>::find(char delimiter) {
     return -1; // Not found
 }
 
-
 // Peeks 'len' bytes starting 'offset' bytes from the tail, returns bytes peeked
 template <typename T>
-size_t CircularBuffer<T>::peek(char* data, size_t offset, size_t len) {
-     if (len == 0 || offset >= count) return 0;
+size_t CircularBuffer<T>::peek(char *data, size_t offset, size_t len)
+{
+    if (len == 0 || offset >= count)
+    {
+        return 0;
+    }
 
-     size_t peek_len = std::min(len, count - offset); // Adjust len to what's actually available after offset
-     if (peek_len == 0) return 0;
+    size_t peek_len = std::min(len, count - offset); // Adjust len to what's actually available after offset
+    if (peek_len == 0)
+    {
+        return 0;
+    }
 
-     size_t start_pos = (tail + offset) % capacity;
+    size_t start_pos = (tail + offset) % capacity;
 
-     // Peek in possibly two parts
-     size_t part1_len = std::min(peek_len, capacity - start_pos);
-     memcpy(data, buffer.data() + start_pos, part1_len);
+    // Peek in possibly two parts
+    size_t part1_len = std::min(peek_len, capacity - start_pos);
+    memcpy(data, buffer.data() + start_pos, part1_len);
 
-     if (part1_len < peek_len) {
-         size_t part2_len = peek_len - part1_len;
-         memcpy(data + part1_len, buffer.data(), part2_len); // Start from beginning of buffer data
-     }
+    if (part1_len < peek_len)
+    {
+        size_t part2_len = peek_len - part1_len;
+        memcpy(data + part1_len, buffer.data(), part2_len); // Start from beginning of buffer data
+    }
 
-     return peek_len;
+    return peek_len;
 }
 
 // Helper to peek into a vector
 template <typename T>
-std::vector<T> CircularBuffer<T>::peek_bytes(size_t offset, size_t len) {
+std::vector<T> CircularBuffer<T>::peek_bytes(size_t offset, size_t len)
+{
     std::vector<T> result;
-    if (len == 0 || offset >= count) return result;
+    if (len == 0 || offset >= count)
+    {
+        return result;
+    }
 
     size_t peek_len = std::min(len, count - offset);
-    if (peek_len == 0) return result;
+    if (peek_len == 0)
+    {
+        return result;
+    }
 
     result.resize(peek_len);
     peek(result.data(), offset, peek_len); // Use the existing peek function
@@ -316,14 +339,17 @@ std::vector<T> CircularBuffer<T>::peek_bytes(size_t offset, size_t len) {
 
 // Creates a std::string from a portion of the buffer without consuming data
 template <typename T>
-std::string CircularBuffer<T>::substr(size_t offset, size_t len) {
-    if (offset >= count || len == 0) {
+std::string CircularBuffer<T>::substr(size_t offset, size_t len)
+{
+    if (offset >= count || len == 0)
+    {
         return ""; // Invalid offset or zero length requested
     }
 
     // Adjust length to not exceed available bytes after offset
     size_t actual_len = std::min(len, count - offset);
-    if (actual_len == 0) {
+    if (actual_len == 0)
+    {
         return "";
     }
 
@@ -333,36 +359,45 @@ std::string CircularBuffer<T>::substr(size_t offset, size_t len) {
 }
 
 template <typename T>
-void CircularBuffer<T>::consume(size_t len) {
+void CircularBuffer<T>::consume(size_t len)
+{
     size_t consume_len = std::min(len, count); // Cannot consume more than available
-    if (consume_len == 0) return;
+    if (consume_len == 0)
+    {
+        return;
+    }
 
     tail = (tail + consume_len) % capacity;
     count -= consume_len;
 }
 
 template <typename T>
-size_t CircularBuffer<T>::bytes_available() const {
+size_t CircularBuffer<T>::bytes_available() const
+{
     return count;
 }
 
 template <typename T>
-size_t CircularBuffer<T>::space_available() const {
+size_t CircularBuffer<T>::space_available() const
+{
     return capacity - count;
 }
 
 template <typename T>
-bool CircularBuffer<T>::empty() const {
+bool CircularBuffer<T>::empty() const
+{
     return count == 0;
 }
 
 template <typename T>
-bool CircularBuffer<T>::full() const {
+bool CircularBuffer<T>::full() const
+{
     return count == capacity;
 }
 
 template <typename T>
-void CircularBuffer<T>::reset() {
+void CircularBuffer<T>::reset()
+{
     head = 0;
     tail = 0;
     count = 0;
@@ -375,567 +410,1180 @@ template class CircularBuffer<char>;
 
 Contents of ../../src/subscriber.cpp:
 ```c++
-// File: ../../src/subscriber.cpp
 #include "subscriber.h"
-#include "circular_buffer.h" // Include Circular Buffer
-#include <cstdio>   // For setvbuf, fflush, perror
-#include <cstdlib>  // For atoi, exit
-#include <arpa/inet.h> // For ntohl, ntohs, inet_ntop
-#include <iomanip>   // For std::setprecision, std::fixed
-#include <cmath>     // For pow
-#include <vector>    // For std::vector used in deserialization
-#include <limits>    // For numeric_limits
-#include <sstream>   // For stringstream
-#include <stdexcept> // For runtime_error
+#include "circular_buffer.h"
+#include <cstdio>
+#include <cstdlib>
+#include <arpa/inet.h>
+#include <iomanip>
+#include <cmath>
+#include <vector>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
 
-// --- Helper Function Declarations ---
-static bool parse_arguments(int argc, char *argv[], std::string& client_id, std::string& server_ip, int& server_port);
-static int setup_and_connect(const std::string& server_ip, int server_port);
-static bool send_client_id(int client_socket, const std::string& client_id);
-static void initialize_poll_fds(std::vector<struct pollfd>& poll_fds, int client_socket);
-static void handle_user_input(int client_socket, bool& running);
-static ssize_t receive_server_data(int client_socket, CircularBuffer<char>& server_buffer);
-static std::string format_received_message(const std::string& sender_ip, uint16_t sender_port,
-                                          const std::string& topic, uint8_t udp_type,
-                                          const char* content_data, uint16_t content_len);
-static void deserialize_and_process_message(CircularBuffer<char>& server_buffer);
-static void handle_server_message(int client_socket, CircularBuffer<char>& server_buffer, bool& running);
-static void subscriber_loop(int client_socket, std::vector<struct pollfd>& poll_fds);
+static bool parse_arguments(int argc, char *argv[], std::string &client_id, std::string &server_ip, int &server_port);
+static int setup_and_connect(const std::string &server_ip, int server_port);
+static bool send_client_id(int client_socket, const std::string &client_id);
+static void initialize_poll_fds(std::vector<struct pollfd> &poll_fds, int client_socket);
+static void handle_user_input(int client_socket, bool &running);
+static ssize_t receive_server_data(int client_socket, CircularBuffer<char> &server_buffer);
+static std::string format_received_message(const std::string &sender_ip, uint16_t sender_port,
+                                           const std::string &topic, uint8_t udp_type,
+                                           const char *content_data, uint16_t content_len);
+static void deserialize_and_process_message(CircularBuffer<char> &server_buffer);
+static void handle_server_message(int client_socket, CircularBuffer<char> &server_buffer, bool &running);
+static void subscriber_loop(int client_socket, std::vector<struct pollfd> &poll_fds);
 
-
-// --- Main Client Logic ---
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
-    std::string client_id; std::string server_ip; int server_port;
-    if (!parse_arguments(argc, argv, client_id, server_ip, server_port)) return 1;
+
+    std::string client_id;
+    std::string server_ip;
+    int server_port;
+
+    if (!parse_arguments(argc, argv, client_id, server_ip, server_port))
+    {
+        return 1;
+    }
+
     int client_socket = setup_and_connect(server_ip, server_port);
-    if (!send_client_id(client_socket, client_id)) { close(client_socket); return 1; }
+
+    if (!send_client_id(client_socket, client_id))
+    {
+        close(client_socket);
+        return 1;
+    }
+
     std::vector<struct pollfd> poll_fds(2);
+
     initialize_poll_fds(poll_fds, client_socket);
     subscriber_loop(client_socket, poll_fds);
     close(client_socket);
+
     return 0;
 }
 
-// --- Helper Function Implementations ---
-static bool parse_arguments(int argc, char *argv[], std::string& client_id, std::string& server_ip, int& server_port) {
-    if (argc != 4) { std::cerr << "Usage: " << argv[0] << " <ID_CLIENT> <IP_SERVER> <PORT_SERVER>" << std::endl; return false; }
+static bool parse_arguments(int argc, char *argv[], std::string &client_id, std::string &server_ip, int &server_port)
+{
+    if (argc != 4)
+    {
+        std::cerr << "Usage: " << argv[0] << " <ID_CLIENT> <IP_SERVER> <PORT_SERVER>" << std::endl;
+        return false;
+    }
+    
     client_id = argv[1];
-    if (client_id.length() > MAX_ID_SIZE) { std::cerr << "ERROR: Client ID too long (max " << MAX_ID_SIZE << " characters)." << std::endl; return false; }
+    
+    if (client_id.length() > MAX_ID_SIZE)
+    {
+        std::cerr << "ERROR: Client ID too long (max " << MAX_ID_SIZE << " characters)." << std::endl;
+        return false;
+    }
+    
     server_ip = argv[2];
     server_port = atoi(argv[3]);
-    if (server_port <= 0 || server_port > 65535) { std::cerr << "ERROR: Invalid server port." << std::endl; return false; }
+    
+    if (server_port <= 0 || server_port > 65535)
+    {
+        std::cerr << "ERROR: Invalid server port." << std::endl;
+        return false;
+    }
+    
     return true;
 }
-static int setup_and_connect(const std::string& server_ip, int server_port) {
+static int setup_and_connect(const std::string &server_ip, int server_port)
+{
     int client_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (client_socket < 0) error("ERROR opening socket");
-    int flag = 1; if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int)) < 0) perror("WARN: setsockopt TCP_NODELAY failed");
-    struct sockaddr_in server_addr; memset(&server_addr, 0, sizeof(server_addr)); server_addr.sin_family = AF_INET; server_addr.sin_port = htons(server_port);
-    if (inet_pton(AF_INET, server_ip.c_str(), &server_addr.sin_addr) <= 0) { close(client_socket); error("ERROR invalid server IP address"); }
-    if (connect(client_socket, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) { close(client_socket); error("ERROR connecting to server"); }
+    
+    if (client_socket < 0)
+    {
+        error("ERROR opening socket");
+    }
+    
+    int flag = 1;
+    
+    if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int)) < 0)
+    {
+        perror("WARN: setsockopt TCP_NODELAY failed");
+    }
+    
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(server_port);
+    
+    if (inet_pton(AF_INET, server_ip.c_str(), &server_addr.sin_addr) <= 0)
+    {
+        close(client_socket);
+        error("ERROR invalid server IP address");
+    }
+    
+    if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        close(client_socket);
+        error("ERROR connecting to server");
+    }
+    
     return client_socket;
 }
-static bool send_client_id(int client_socket, const std::string& client_id) {
-    if (send_all(client_socket, client_id.c_str(), client_id.length() + 1, 0) < 0) { std::cerr << "ERROR sending client ID failed." << std::endl; return false; }
+static bool send_client_id(int client_socket, const std::string &client_id)
+{
+    if (send_all(client_socket, client_id.c_str(), client_id.length() + 1, 0) < 0)
+    {
+        std::cerr << "ERROR sending client ID failed." << std::endl;
+        return false;
+    }
+    
     return true;
 }
-static void initialize_poll_fds(std::vector<struct pollfd>& poll_fds, int client_socket) {
-    poll_fds[0].fd = STDIN_FILENO; poll_fds[0].events = POLLIN; poll_fds[0].revents = 0;
-    poll_fds[1].fd = client_socket; poll_fds[1].events = POLLIN; poll_fds[1].revents = 0;
+static void initialize_poll_fds(std::vector<struct pollfd> &poll_fds, int client_socket)
+{
+    poll_fds[0].fd = STDIN_FILENO;
+    poll_fds[0].events = POLLIN;
+    poll_fds[0].revents = 0;
+    poll_fds[1].fd = client_socket;
+    poll_fds[1].events = POLLIN;
+    poll_fds[1].revents = 0;
 }
 
-// Main loop passing the correct buffer
-static void subscriber_loop(int client_socket, std::vector<struct pollfd>& poll_fds) {
-    CircularBuffer<char> server_buffer(4 * BUFFER_SIZE); // Buffer for incoming data packets
+static void subscriber_loop(int client_socket, std::vector<struct pollfd> &poll_fds)
+{
+    CircularBuffer<char> server_buffer(CIRCULAR_BUFFER_SIZE);
     bool running = true;
-    while (running) {
-        int poll_count = poll(poll_fds.data(), poll_fds.size(), -1);
-        if (poll_count < 0) { if (errno == EINTR) continue; error("ERROR on poll"); }
 
-        if (poll_fds[0].revents & POLLIN) { handle_user_input(client_socket, running); } // Handles commands
+    while (running)
+    {
+        int poll_count = poll(poll_fds.data(), poll_fds.size(), -1);
+        if (poll_count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            error("ERROR on poll");
+        }
+
+        if (poll_fds[0].revents & POLLIN)
+        {
+            handle_user_input(client_socket, running);
+        }
 
         bool disconnected = false;
-        if (poll_fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) { disconnected = true; }
-         if (poll_fds[1].revents & POLLIN) {
-            handle_server_message(client_socket, server_buffer, running); // Pass server_buffer for data
-         } else if (disconnected) {
-             handle_server_message(client_socket, server_buffer, running); // Process remaining buffer on disconnect
-             if (running) { std::cerr << "ERROR: Server connection error/hangup." << std::endl; running = false; }
-         }
+        if (poll_fds[1].revents & (POLLERR | POLLHUP | POLLNVAL))
+        {
+            disconnected = true;
+        }
 
-        for (auto& pfd : poll_fds) pfd.revents = 0;
+        if (!disconnected && (poll_fds[1].revents & POLLIN))
+        {
+            handle_server_message(client_socket, server_buffer, running);
+        }
+
+        else if (disconnected)
+        {
+            handle_server_message(client_socket, server_buffer, running);
+            if (running)
+            {
+                std::cerr << "ERROR: Server connection error/hangup." << std::endl;
+                running = false;
+            }
+        }
+
+        for (auto &pfd : poll_fds)
+        {
+            pfd.revents = 0;
+        }
     }
 }
 
-// Handles user input from stdin - includes flushing
-static void handle_user_input(int client_socket, bool& running) {
-    char buffer[BUFFER_SIZE]; memset(buffer, 0, BUFFER_SIZE);
-    if (fgets(buffer, BUFFER_SIZE - 1, stdin) == NULL) {
-        if (feof(stdin)) { running = false; } else { perror("ERROR reading from stdin"); running = false; } return;
-    }
-    buffer[strcspn(buffer, "\n")] = 0; std::string input_line(buffer);
-    input_line.erase(0, input_line.find_first_not_of(" \t\r\n")); input_line.erase(input_line.find_last_not_of(" \t\r\n") + 1);
-    if (input_line.empty()) return;
 
-    std::stringstream ss(input_line); std::string command_verb; ss >> command_verb;
-    if (command_verb == "exit") { running = false;
-    } else if (command_verb == "subscribe") {
-        std::string topic; int sf_val = 0;
-        if (ss >> topic && ss.peek() == EOF) {
-            if (topic.length() > TOPIC_SIZE) { std::cout << "ERROR: Topic too long (max " << TOPIC_SIZE << " characters)." << std::endl; fflush(stdout); }
-            else { std::string cmd = "subscribe " + topic + " " + std::to_string(sf_val) + "\n";
-                   if (send_all(client_socket, cmd.c_str(), cmd.size(), 0) < 0) { running = false; }
-                   else { std::cout << "Subscribed to topic." << std::endl; fflush(stdout); } }
-        } else { std::cout << "Usage: subscribe <topic>" << std::endl; fflush(stdout); if (!ss.eof()) ss.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); }
-    } else if (command_verb == "unsubscribe") {
+static void handle_user_input(int client_socket, bool &running)
+{
+    char buffer[BUFFER_SIZE];
+    memset(buffer, 0, BUFFER_SIZE);
+
+    if (fgets(buffer, BUFFER_SIZE - 1, stdin) == NULL)
+    {
+        if (feof(stdin))
+        {
+            running = false;
+        }
+        else
+        {
+            perror("ERROR reading from stdin");
+            running = false;
+        }
+        return;
+    }
+
+    buffer[strcspn(buffer, "\n")] = 0;
+    std::string input_line(buffer);
+
+    if (input_line.empty())
+    {
+        return;
+    }
+
+    std::stringstream ss(input_line);
+    std::string command_verb;
+    ss >> command_verb;
+
+    if (command_verb == "exit")
+    {
+        running = false;
+    }
+
+    else if (command_verb == "subscribe")
+    {
         std::string topic;
-        if (ss >> topic && ss.eof()) {
-             if (topic.length() > TOPIC_SIZE) { std::cout << "ERROR: Topic too long (max " << TOPIC_SIZE << " characters)." << std::endl; fflush(stdout); }
-             else { std::string cmd = "unsubscribe " + topic + "\n";
-                    if (send_all(client_socket, cmd.c_str(), cmd.size(), 0) < 0) { running = false; }
-                    else { std::cout << "Unsubscribed from topic." << std::endl; fflush(stdout); } }
-        } else { std::cout << "Usage: unsubscribe <topic>" << std::endl; fflush(stdout); }
-    } else { std::cout << "Unknown command. Available: subscribe, unsubscribe, exit." << std::endl; fflush(stdout); }
+        int sf_val = 0;
+        if (ss >> topic && ss.peek() == EOF)
+        {
+            if (topic.length() > TOPIC_SIZE)
+            {
+                std::cerr << "ERROR: Topic too long (max " << TOPIC_SIZE << " characters)." << std::endl;
+            }
+            else
+            {
+                std::string cmd = "subscribe " + topic + " " + std::to_string(sf_val) + "\n";
+                if (send_all(client_socket, cmd.c_str(), cmd.size(), 0) < 0)
+                {
+                    running = false;
+                }
+                else
+                {
+                    std::cout << "Subscribed to topic." << std::endl;
+                }
+            }
+        }
+        else
+        {
+            std::cerr << "Usage: subscribe <topic>" << std::endl;
+
+            if (!ss.eof())
+            {
+                ss.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            }
+        }
+    }
+
+    else if (command_verb == "unsubscribe")
+    {
+        std::string topic;
+        if (ss >> topic && ss.eof())
+        {
+            if (topic.length() > TOPIC_SIZE)
+            {
+                std::cerr << "ERROR: Topic too long (max " << TOPIC_SIZE << " characters)." << std::endl;
+            }
+            else
+            {
+                std::string cmd = "unsubscribe " + topic + "\n";
+                if (send_all(client_socket, cmd.c_str(), cmd.size(), 0) < 0)
+                {
+                    running = false;
+                }
+                else
+                {
+                    std::cout << "Unsubscribed from topic." << std::endl;
+                }
+            }
+        }
+        else
+        {
+            std::cerr << "Usage: unsubscribe <topic>" << std::endl;
+        }
+    }
+
+    else
+    {
+        std::cerr << "Unknown command. Available: subscribe, unsubscribe, exit." << std::endl;
+    }
 }
 
-// Receives data from server into the specified buffer
-static ssize_t receive_server_data(int client_socket, CircularBuffer<char>& buffer_to_fill) { // Renamed parameter
-    char recv_tmp_buffer[BUFFER_SIZE]; memset(recv_tmp_buffer, 0, BUFFER_SIZE);
+static ssize_t receive_server_data(int client_socket, CircularBuffer<char> &buffer_to_fill)
+{
+    char recv_tmp_buffer[BUFFER_SIZE];
+    memset(recv_tmp_buffer, 0, BUFFER_SIZE);
     ssize_t bytes_received = recv(client_socket, recv_tmp_buffer, BUFFER_SIZE, 0);
-    if (bytes_received > 0) {
-        if (!buffer_to_fill.write(recv_tmp_buffer, bytes_received)) { // Write to correct buffer
-            std::cerr << "ERROR: Subscriber buffer overflow. Server data potentially lost. Disconnecting." << std::endl; fflush(stderr);
+    if (bytes_received > 0)
+    {
+        if (!buffer_to_fill.write(recv_tmp_buffer, bytes_received))
+        {
+            std::cerr << "ERROR: Subscriber buffer overflow. Server data potentially lost. Disconnecting." << std::endl;
+
             return -2;
         }
-    } else if (bytes_received < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
-        if (errno != ECONNRESET && errno != EPIPE && errno != EINTR) perror("ERROR receiving from server");
+    }
+    else if (bytes_received < 0)
+    {
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            return 0;
+        }
+        if (errno != ECONNRESET && errno != EPIPE && errno != EINTR)
+        {
+            perror("ERROR receiving from server");
+        }
     }
     return bytes_received;
 }
 
-// Formats the deserialized message data - includes precise FLOAT/SHORT_REAL formatting
-static std::string format_received_message(const std::string& sender_ip, uint16_t sender_port,
-                                          const std::string& topic, uint8_t udp_type,
-                                          const char* content_data, uint16_t content_len) {
+static std::string format_received_message(const std::string &sender_ip, uint16_t sender_port,
+                                           const std::string &topic, uint8_t udp_type,
+                                           const char *content_data, uint16_t content_len)
+{
     std::stringstream result_ss;
     result_ss << sender_ip << ":" << sender_port << " - ";
     result_ss << topic << " - ";
-    switch(udp_type) {
-        case 0: { /* INT */
-            if (content_len < 5) { result_ss << "INT - INVALID DATA"; break; }
-            uint8_t sign=content_data[0]; uint32_t net_val; memcpy(&net_val,content_data+1,4);
-            int val=ntohl(net_val); if(sign==1) val=-val; else if(sign!=0) { result_ss<<"INT - INVALID SIGN"; break;}
-            result_ss << "INT - " << val; break;
-        }
-        case 1: { /* SHORT_REAL */
-            if (content_len < 2) { result_ss << "SHORT_REAL - INVALID DATA"; break; }
-            uint16_t net_val; memcpy(&net_val, content_data, 2); float val=ntohs(net_val)/100.0f;
-            if(val==static_cast<int>(val)){ result_ss<<"SHORT_REAL - "<<static_cast<int>(val);}
-            else{ result_ss<<"SHORT_REAL - "<<std::fixed<<std::setprecision(2)<<val; result_ss.unsetf(std::ios_base::floatfield);}
+    switch (udp_type)
+    {
+    case 0:
+    {
+        if (content_len < 5)
+        {
+            result_ss << "INT - INVALID DATA";
             break;
         }
-        case 2: { /* FLOAT */
-            if(content_len<6){ result_ss<<"FLOAT - INVALID DATA"; break;}
-            uint8_t sign=content_data[0]; uint32_t net_val; memcpy(&net_val,content_data+1,4); uint8_t power=content_data[5];
-            double val=ntohl(net_val); double p10=1.0; for(int p=0;p<power;++p) p10/=10.0; val*=p10;
-            if(sign==1) val=-val; else if(sign!=0){ result_ss<<"FLOAT - INVALID SIGN"; break;}
-            std::stringstream ss_float; ss_float<<std::fixed<<std::setprecision(power)<<val; std::string fs=ss_float.str();
-            if(power>0){ size_t dp=fs.find('.'); if(dp!=std::string::npos){ size_t lnz=fs.find_last_not_of('0'); if(lnz==dp) fs.erase(dp); else if(lnz>dp) fs.erase(lnz+1);}}
-            else{ if(val==static_cast<long long>(val)) fs=std::to_string(static_cast<long long>(val));}
-            result_ss << "FLOAT - " << fs; break;
+        uint8_t sign = content_data[0];
+        uint32_t net_val;
+        memcpy(&net_val, content_data + 1, 4);
+        int val = ntohl(net_val);
+        if (sign == 1)
+        {
+            val = -val;
         }
-        case 3: { /* STRING */ std::string str(content_data, content_len); result_ss << "STRING - " << str; break; }
-        default: result_ss << "UNKNOWN TYPE (" << (int)udp_type << ")";
+        else if (sign != 0)
+        {
+            result_ss << "INT - INVALID SIGN";
+            break;
+        }
+        result_ss << "INT - " << val;
+        break;
+    }
+    case 1:
+    {
+        if (content_len < 2)
+        {
+            result_ss << "SHORT_REAL - INVALID DATA";
+            break;
+        }
+        uint16_t net_val;
+        memcpy(&net_val, content_data, 2);
+        float val = ntohs(net_val) / 100.0f;
+        if (val == static_cast<int>(val))
+        {
+            result_ss << "SHORT_REAL - " << static_cast<int>(val);
+        }
+        else
+        {
+            result_ss << "SHORT_REAL - " << std::fixed << std::setprecision(2) << val;
+            result_ss.unsetf(std::ios_base::floatfield);
+        }
+        break;
+    }
+    case 2:
+    {
+        if (content_len < 6)
+        {
+            result_ss << "FLOAT - INVALID DATA";
+            break;
+        }
+        uint8_t sign = content_data[0];
+        uint32_t net_val;
+        memcpy(&net_val, content_data + 1, 4);
+        uint8_t power = content_data[5];
+        double val = ntohl(net_val);
+        double p10 = 1.0;
+        for (int p = 0; p < power; ++p)
+        {
+            p10 /= 10.0;
+        }
+        val *= p10;
+        if (sign == 1)
+        {
+            val = -val;
+        }
+        else if (sign != 0)
+        {
+            result_ss << "FLOAT - INVALID SIGN";
+            break;
+        }
+        std::stringstream ss_float;
+        ss_float << std::fixed << std::setprecision(power) << val;
+        std::string fs = ss_float.str();
+        if (power > 0)
+        {
+            size_t dp = fs.find('.');
+            if (dp != std::string::npos)
+            {
+                size_t lnz = fs.find_last_not_of('0');
+                if (lnz == dp)
+                {
+                    fs.erase(dp);
+                }
+                else if (lnz > dp)
+                {
+                    fs.erase(lnz + 1);
+                }
+            }
+        }
+        else
+        {
+            if (val == static_cast<long long>(val))
+            {
+                fs = std::to_string(static_cast<long long>(val));
+            }
+        }
+        result_ss << "FLOAT - " << fs;
+        break;
+    }
+    case 3:
+    {
+        std::string str(content_data, content_len);
+        result_ss << "STRING - " << str;
+        break;
+    }
+    default:
+        result_ss << "UNKNOWN TYPE (" << (int)udp_type << ")";
     }
     return result_ss.str();
 }
 
-// Deserializes messages from the specified buffer - Robust version
-static void deserialize_and_process_message(CircularBuffer<char>& data_buffer) { // Renamed parameter
+static void deserialize_and_process_message(CircularBuffer<char> &data_buffer)
+{
     const size_t length_prefix_size = sizeof(uint32_t);
-    while (true) {
-        if (data_buffer.bytes_available() < length_prefix_size) break;
-        uint32_t net_total_msg_len; data_buffer.peek(reinterpret_cast<char*>(&net_total_msg_len), 0, length_prefix_size);
+    while (true)
+    {
+        if (data_buffer.bytes_available() < length_prefix_size)
+        {
+            break;
+        }
+        
+        uint32_t net_total_msg_len;
+        data_buffer.peek(reinterpret_cast<char *>(&net_total_msg_len), 0, length_prefix_size);
         uint32_t total_payload_len = ntohl(net_total_msg_len);
 
-        if (total_payload_len == 0 || total_payload_len > 4 * BUFFER_SIZE) {
-            std::cerr << "ERROR: Invalid payload length: " << total_payload_len << ". Clearing buffer." << std::endl; fflush(stderr);
-            data_buffer.reset(); break;
+        if (total_payload_len == 0 || total_payload_len > 4 * BUFFER_SIZE)
+        {
+            std::cerr << "ERROR: Invalid payload length: " << total_payload_len << ". Clearing buffer." << std::endl;
+            data_buffer.reset();
+            break;
         }
-        size_t total_packet_len = length_prefix_size + total_payload_len;
-        if (data_buffer.bytes_available() < total_packet_len) break;
 
-        // Read the entire packet (prefix + payload) first, then process
+        size_t total_packet_len = length_prefix_size + total_payload_len;
+
+        if (data_buffer.bytes_available() < total_packet_len)
+        {
+            break;
+        }
+
         std::vector<char> full_packet_data(total_packet_len);
         size_t actual_read = data_buffer.read(full_packet_data.data(), total_packet_len);
 
-        if (actual_read != total_packet_len) {
-             std::cerr << "ERROR: Failed reading full packet. Expected " << total_packet_len << " got " << actual_read << ". Resetting buffer." << std::endl; fflush(stderr);
-             data_buffer.reset(); // Reset buffer as state is unknown
-             break;
+        if (actual_read != total_packet_len)
+        {
+            std::cerr << "ERROR: Failed reading full packet. Expected " << total_packet_len << " got " << actual_read << ". Resetting buffer." << std::endl;
+            data_buffer.reset();
+            break;
         }
 
-        // Process the payload part of the packet
-        const char* payload_data_ptr = full_packet_data.data() + length_prefix_size;
+        const char *payload_data_ptr = full_packet_data.data() + length_prefix_size;
         size_t current_offset = 0;
-        std::string sender_ip_str = "INVALID_IP"; uint16_t sender_port = 0;
-        std::string topic; uint8_t udp_type = 255; uint16_t content_len = 0;
-        const char* content_data_ptr = nullptr;
+        std::string sender_ip_str = "INVALID_IP";
+        uint16_t sender_port = 0;
+        std::string topic;
+        uint8_t udp_type = 255;
+        uint16_t content_len = 0;
+        const char *content_data_ptr = nullptr;
 
-        try {
-             if (current_offset + sizeof(uint32_t) > total_payload_len) throw std::runtime_error("Payload too small for IP");
-             uint32_t net_ip; memcpy(&net_ip, payload_data_ptr + current_offset, sizeof(uint32_t)); current_offset += sizeof(uint32_t);
-             struct in_addr ip_addr; ip_addr.s_addr = net_ip; char ip_buffer[INET_ADDRSTRLEN];
-             if (inet_ntop(AF_INET, &ip_addr, ip_buffer, INET_ADDRSTRLEN)) sender_ip_str = ip_buffer;
+        try
+        {
+            if (current_offset + sizeof(uint32_t) > total_payload_len)
+            {
+                throw std::runtime_error("Payload too small for IP");
+            }
+            uint32_t net_ip;
+            memcpy(&net_ip, payload_data_ptr + current_offset, sizeof(uint32_t));
+            current_offset += sizeof(uint32_t);
+            struct in_addr ip_addr;
+            ip_addr.s_addr = net_ip;
+            char ip_buffer[INET_ADDRSTRLEN];
+            if (inet_ntop(AF_INET, &ip_addr, ip_buffer, INET_ADDRSTRLEN))
+            {
+                sender_ip_str = ip_buffer;
+            }
 
-             if (current_offset + sizeof(uint16_t) > total_payload_len) throw std::runtime_error("Payload too small for Port");
-             uint16_t net_port; memcpy(&net_port, payload_data_ptr + current_offset, sizeof(uint16_t)); sender_port = ntohs(net_port); current_offset += sizeof(uint16_t);
+            if (current_offset + sizeof(uint16_t) > total_payload_len)
+            {
+                throw std::runtime_error("Payload too small for Port");
+            }
+            uint16_t net_port;
+            memcpy(&net_port, payload_data_ptr + current_offset, sizeof(uint16_t));
+            sender_port = ntohs(net_port);
+            current_offset += sizeof(uint16_t);
 
-             if (current_offset + sizeof(uint8_t) > total_payload_len) throw std::runtime_error("Payload too small for Topic Len");
-             uint8_t topic_len; memcpy(&topic_len, payload_data_ptr + current_offset, sizeof(uint8_t)); current_offset += sizeof(uint8_t);
-             if (topic_len > total_payload_len - current_offset) throw std::runtime_error("Topic length exceeds remaining payload");
-             topic.assign(payload_data_ptr + current_offset, topic_len); current_offset += topic_len;
+            if (current_offset + sizeof(uint8_t) > total_payload_len)
+            {
+                throw std::runtime_error("Payload too small for Topic Len");
+            }
+            uint8_t topic_len;
+            memcpy(&topic_len, payload_data_ptr + current_offset, sizeof(uint8_t));
+            current_offset += sizeof(uint8_t);
+            if (topic_len > total_payload_len - current_offset)
+            {
+                throw std::runtime_error("Topic length exceeds remaining payload");
+            }
+            topic.assign(payload_data_ptr + current_offset, topic_len);
+            current_offset += topic_len;
 
-             if (current_offset + sizeof(uint8_t) > total_payload_len) throw std::runtime_error("Payload too small for UDP Type");
-             memcpy(&udp_type, payload_data_ptr + current_offset, sizeof(uint8_t)); current_offset += sizeof(uint8_t);
+            if (current_offset + sizeof(uint8_t) > total_payload_len)
+            {
+                throw std::runtime_error("Payload too small for UDP Type");
+            }
+            memcpy(&udp_type, payload_data_ptr + current_offset, sizeof(uint8_t));
+            current_offset += sizeof(uint8_t);
 
-             if (current_offset + sizeof(uint16_t) > total_payload_len) throw std::runtime_error("Payload too small for Content Len");
-             uint16_t net_content_len; memcpy(&net_content_len, payload_data_ptr + current_offset, sizeof(uint16_t)); content_len = ntohs(net_content_len); current_offset += sizeof(uint16_t);
-             if (content_len > total_payload_len - current_offset) throw std::runtime_error("Content length exceeds remaining payload");
-             content_data_ptr = payload_data_ptr + current_offset;
+            if (current_offset + sizeof(uint16_t) > total_payload_len)
+            {
+                throw std::runtime_error("Payload too small for Content Len");
+            }
+            uint16_t net_content_len;
+            memcpy(&net_content_len, payload_data_ptr + current_offset, sizeof(uint16_t));
+            content_len = ntohs(net_content_len);
+            current_offset += sizeof(uint16_t);
+            if (content_len > total_payload_len - current_offset)
+            {
+                throw std::runtime_error("Content length exceeds remaining payload");
+            }
+            content_data_ptr = payload_data_ptr + current_offset;
 
             std::string formatted_output = format_received_message(sender_ip_str, sender_port, topic, udp_type, content_data_ptr, content_len);
             std::cout << formatted_output << std::endl;
-            fflush(stdout); // Flush data output
-        } catch (const std::runtime_error& e) {
-            std::cerr << "ERROR: Deserialization failed - " << e.what() << ". Skipping packet." << std::endl; fflush(stderr);
+        }
+        catch (const std::runtime_error &e)
+        {
+            std::cerr << "ERROR: Deserialization failed - " << e.what() << ". Skipping packet." << std::endl;
         }
     }
 }
 
-// Handles messages received from the server socket - passes the correct buffer
-static void handle_server_message(int client_socket, CircularBuffer<char>& server_data_buffer, bool& running) { // Renamed parameter
-    ssize_t bytes_received = receive_server_data(client_socket, server_data_buffer); // Pass correct buffer
-    if (bytes_received < 0) { running = false; return; } // Error
-    if (bytes_received == 0 && server_data_buffer.empty()) { running = false; return; } // Disconnect
-    if (bytes_received == -2) { running = false; return; } // Buffer overflow
-    deserialize_and_process_message(server_data_buffer); // Pass correct buffer
-}```
+static void handle_server_message(int client_socket, CircularBuffer<char> &server_data_buffer, bool &running)
+{
+    ssize_t bytes_received = receive_server_data(client_socket, server_data_buffer);
+    if (bytes_received < 0)
+    {
+        running = false;
+        return;
+    }
+    if (bytes_received == 0 && server_data_buffer.empty())
+    {
+        running = false;
+        return;
+    }
+    if (bytes_received == -2)
+    {
+        running = false;
+        return;
+    }
+    deserialize_and_process_message(server_data_buffer);
+}
+```
 
 
 Contents of ../../src/server.cpp:
 ```c++
-// File: ../../src/server.cpp
 #include "server.h"
-#include <algorithm> // For std::min, std::find_if
-#include <cstdio>   // For setvbuf
-#include <cstdlib>  // For atoi, exit
-#include <csignal>  // For signal handling (related to EINTR)
-#include <vector>    // For std::vector used in serialization
-#include <arpa/inet.h> // Include for byte order functions if needed
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <csignal>
+#include <vector>
+#include <arpa/inet.h>
 
-// --- Type Definitions ---
 using PollFds = std::vector<struct pollfd>;
 using SubscribersMap = std::map<std::string, Subscriber>;
 using SocketToIdMap = std::map<int, std::string>;
 
-// --- Forward Declarations ---
-struct ServerSockets { int tcp = -1; int udp = -1; };
-static ServerSockets setup_server_sockets(int port);
-static void close_server_sockets(const ServerSockets& sockets);
-static void initialize_poll_fds(PollFds& poll_fds, const ServerSockets& sockets);
-static void handle_stdin(bool& running);
-static void handle_new_connection(int listener_socket, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
-static void handle_udp_message(int udp_socket, SubscribersMap& subscribers);
-static void handle_client_activity(PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
-static bool receive_client_id(int client_socket, std::string& client_id_str);
-static void handle_reconnection(Subscriber& sub, int new_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SocketToIdMap& socket_to_id);
-static void handle_new_client(const std::string& client_id, int client_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
-static void send_stored_messages(Subscriber& sub);
-static void handle_client_disconnection(int client_socket, size_t poll_index, const std::string& client_id, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id);
-static bool process_commands_from_buffer(Subscriber& sub);
-static void parse_and_execute_command(Subscriber& sub, const std::string& command_line);
-static bool parse_udp_datagram(const char* buffer, int bytes_received, UdpMessage& udp_msg);
-static std::vector<char> serialize_forward_message(const UdpMessage& msg);
-static void distribute_udp_message(const UdpMessage& msg, const std::vector<char>& serialized_packet, SubscribersMap& subscribers);
-bool topicMatches(const std::string& topic, const std::string& pattern); // Ensure declaration matches definition
 
-// --- topicMatches ---
-bool topicMatches(const std::string& topic, const std::string& pattern) {
+struct ServerSockets
+{
+    int tcp = -1;
+    int udp = -1;
+};
+
+static ServerSockets setup_server_sockets(int port);
+static void close_server_sockets(const ServerSockets &sockets);
+static void initialize_poll_fds(PollFds &poll_fds, const ServerSockets &sockets);
+static void handle_stdin(bool &running);
+static void handle_new_connection(int listener_socket, PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id);
+static void handle_udp_message(int udp_socket, SubscribersMap &subscribers);
+static void handle_client_activity(PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id);
+static bool receive_client_id(int client_socket, std::string &client_id_str);
+static void handle_reconnection(Subscriber &sub, int new_socket, const struct sockaddr_in &client_addr, PollFds &poll_fds, SocketToIdMap &socket_to_id);
+static void handle_new_client(const std::string &client_id, int client_socket, const struct sockaddr_in &client_addr, PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id);
+static void send_stored_messages(Subscriber &sub);
+static void handle_client_disconnection(int client_socket, size_t poll_index, const std::string &client_id, PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id);
+static bool process_commands_from_buffer(Subscriber &sub);
+static void parse_and_execute_command(Subscriber &sub, const std::string &command_line);
+static bool parse_udp_datagram(const char *buffer, int bytes_received, UdpMessage &udp_msg);
+static std::vector<char> serialize_forward_message(const UdpMessage &msg);
+static void distribute_udp_message(const UdpMessage &msg, const std::vector<char> &serialized_packet, SubscribersMap &subscribers);
+static bool topicMatches(const std::string &topic, const std::string &pattern);
+
+int main(int argc, char *argv[])
+{
+    setvbuf(stdout, NULL, _IONBF, BUFSIZ);
+    if (argc != 2)
+    {
+        std::cerr << "Usage: " << argv[0] << " <PORT>" << std::endl;
+        return 1;
+    }
+    int port = atoi(argv[1]);
+    if (port <= 0 || port > 65535)
+    {
+        std::cerr << "ERROR: Invalid port number." << std::endl;
+        return 1;
+    }
+
+    ServerSockets sockets = setup_server_sockets(port);
+    if (sockets.tcp < 0 || sockets.udp < 0)
+    {
+        return 1;
+    }
+    if (listen(sockets.tcp, MAX_CLIENTS) < 0)
+    {
+        close_server_sockets(sockets);
+        error("ERROR on listen");
+    }
+    std::cerr << "Server started on port " << port << std::endl;
+
+    SubscribersMap subscribers;
+    PollFds poll_fds;
+    SocketToIdMap socket_to_id;
+    initialize_poll_fds(poll_fds, sockets);
+
+    bool running = true;
+    while (running)
+    {
+        int poll_count = poll(poll_fds.data(), poll_fds.size(), -1);
+        if (poll_count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            error("ERROR on poll");
+        }
+
+        if (poll_fds.size() > 2 && poll_fds[2].revents & POLLIN)
+        {
+            handle_stdin(running);
+            if (!running)
+            {
+                break;
+            }
+        }
+        if (poll_fds.size() > 0 && poll_fds[0].revents & POLLIN)
+        {
+            handle_new_connection(sockets.tcp, poll_fds, subscribers, socket_to_id);
+        }
+        if (poll_fds.size() > 1 && poll_fds[1].revents & POLLIN)
+        {
+            handle_udp_message(sockets.udp, subscribers);
+        }
+        handle_client_activity(poll_fds, subscribers, socket_to_id);
+
+        for (auto &pfd_entry : poll_fds)
+        {
+            pfd_entry.revents = 0;
+        }
+    }
+    close_server_sockets(sockets);
+    return 0;
+}
+
+static bool topicMatches(const std::string &topic, const std::string &pattern)
+{
     std::vector<std::string> t_segs, p_segs;
     std::string segment;
     std::stringstream ss_t(topic);
-    while (getline(ss_t, segment, '/')) { t_segs.push_back(segment); }
+    while (getline(ss_t, segment, '/'))
+    {
+        t_segs.push_back(segment);
+    }
     std::stringstream ss_p(pattern);
-    while (getline(ss_p, segment, '/')) { p_segs.push_back(segment); }
+    while (getline(ss_p, segment, '/'))
+    {
+        p_segs.push_back(segment);
+    }
 
-    size_t N = t_segs.size(); size_t M = p_segs.size();
-    std::vector<bool> prev_dp(M + 1, false); std::vector<bool> curr_dp(M + 1, false);
+    size_t N = t_segs.size();
+    size_t M = p_segs.size();
+    std::vector<bool> prev_dp(M + 1, false);
+    std::vector<bool> curr_dp(M + 1, false);
     prev_dp[0] = true;
-    for (size_t j = 1; j <= M; ++j) { if (p_segs[j - 1] == "*") prev_dp[j] = prev_dp[j - 1]; }
+    for (size_t j = 1; j <= M; ++j)
+    {
+        if (p_segs[j - 1] == "*")
+        {
+            prev_dp[j] = prev_dp[j - 1];
+        }
+    }
 
-    for (size_t i = 1; i <= N; ++i) {
+    for (size_t i = 1; i <= N; ++i)
+    {
         curr_dp[0] = false;
-        for (size_t j = 1; j <= M; ++j) {
-            const std::string& p_seg = p_segs[j - 1]; const std::string& t_seg = t_segs[i - 1];
-            if (p_seg == "+") curr_dp[j] = prev_dp[j - 1];
-            else if (p_seg == "*") curr_dp[j] = curr_dp[j - 1] || prev_dp[j];
-            else curr_dp[j] = (p_seg == t_seg) && prev_dp[j - 1];
+        for (size_t j = 1; j <= M; ++j)
+        {
+            const std::string &p_seg = p_segs[j - 1];
+            const std::string &t_seg = t_segs[i - 1];
+            if (p_seg == "+")
+            {
+                curr_dp[j] = prev_dp[j - 1];
+            }
+            else if (p_seg == "*")
+            {
+                curr_dp[j] = curr_dp[j - 1] || prev_dp[j];
+            }
+            else
+            {
+                curr_dp[j] = (p_seg == t_seg) && prev_dp[j - 1];
+            }
         }
         prev_dp = curr_dp;
     }
     return prev_dp[M];
 }
 
-
-// --- Main Server Logic ---
-int main(int argc, char *argv[]) {
-    setvbuf(stdout, NULL, _IONBF, BUFSIZ);
-    if (argc != 2) { std::cerr << "Usage: " << argv[0] << " <PORT>" << std::endl; return 1; }
-    int port = atoi(argv[1]);
-    if (port <= 0 || port > 65535) { std::cerr << "ERROR: Invalid port number." << std::endl; return 1; }
-
-    ServerSockets sockets = setup_server_sockets(port);
-    if (sockets.tcp < 0 || sockets.udp < 0) return 1;
-    if (listen(sockets.tcp, MAX_CLIENTS) < 0) { close_server_sockets(sockets); error("ERROR on listen"); }
-    std::cerr << "Server started on port " << port << std::endl;
-
-    SubscribersMap subscribers; PollFds poll_fds; SocketToIdMap socket_to_id;
-    initialize_poll_fds(poll_fds, sockets);
-
-    bool running = true;
-    while (running) {
-        int poll_count = poll(poll_fds.data(), poll_fds.size(), -1);
-        if (poll_count < 0) { if (errno == EINTR) continue; error("ERROR on poll"); }
-
-        if (poll_fds.size() > 2 && poll_fds[2].revents & POLLIN) { handle_stdin(running); if (!running) break; } // Check index validity
-        if (poll_fds.size() > 0 && poll_fds[0].revents & POLLIN) { handle_new_connection(sockets.tcp, poll_fds, subscribers, socket_to_id); }
-        if (poll_fds.size() > 1 && poll_fds[1].revents & POLLIN) { handle_udp_message(sockets.udp, subscribers); }
-        handle_client_activity(poll_fds, subscribers, socket_to_id);
-
-        for (auto& pfd_entry : poll_fds) pfd_entry.revents = 0; // Reset revents
-    }
-    close_server_sockets(sockets);
-    return 0;
-}
-
-// --- Socket Setup ---
-static ServerSockets setup_server_sockets(int port) {
-    ServerSockets sockets = {-1, -1}; int enable = 1; struct sockaddr_in server_addr;
+static ServerSockets setup_server_sockets(int port)
+{
+    ServerSockets sockets = {-1, -1};
+    int enable = 1;
+    struct sockaddr_in server_addr;
     sockets.tcp = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockets.tcp < 0) { error("ERROR opening TCP socket"); }
-    if (setsockopt(sockets.tcp, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) { close(sockets.tcp); error("ERROR setting SO_REUSEADDR on TCP"); }
+    if (sockets.tcp < 0)
+    {
+        error("ERROR opening TCP socket");
+    }
+    if (setsockopt(sockets.tcp, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
+    {
+        close(sockets.tcp);
+        error("ERROR setting SO_REUSEADDR on TCP");
+    }
     sockets.udp = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockets.udp < 0) { close(sockets.tcp); error("ERROR opening UDP socket"); }
-    if (setsockopt(sockets.udp, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) { close(sockets.tcp); close(sockets.udp); error("ERROR setting SO_REUSEADDR on UDP"); }
-    memset(&server_addr, 0, sizeof(server_addr)); server_addr.sin_family = AF_INET; server_addr.sin_port = htons(port); server_addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(sockets.tcp, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) { close(sockets.tcp); close(sockets.udp); error("ERROR binding TCP socket"); }
-    if (bind(sockets.udp, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) { close(sockets.tcp); close(sockets.udp); error("ERROR binding UDP socket"); }
+    if (sockets.udp < 0)
+    {
+        close(sockets.tcp);
+        error("ERROR opening UDP socket");
+    }
+    if (setsockopt(sockets.udp, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
+    {
+        close(sockets.tcp);
+        close(sockets.udp);
+        error("ERROR setting SO_REUSEADDR on UDP");
+    }
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    if (bind(sockets.tcp, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        close(sockets.tcp);
+        close(sockets.udp);
+        error("ERROR binding TCP socket");
+    }
+    if (bind(sockets.udp, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        close(sockets.tcp);
+        close(sockets.udp);
+        error("ERROR binding UDP socket");
+    }
     return sockets;
 }
-static void close_server_sockets(const ServerSockets& sockets) {
-    if (sockets.tcp >= 0) close(sockets.tcp); if (sockets.udp >= 0) close(sockets.udp);
+static void close_server_sockets(const ServerSockets &sockets)
+{
+    if (sockets.tcp >= 0)
+    {
+        close(sockets.tcp);
+    }
+    if (sockets.udp >= 0)
+    {
+        close(sockets.udp);
+    }
 }
 
-// --- Poll Initialization ---
-static void initialize_poll_fds(PollFds& poll_fds, const ServerSockets& sockets) {
+static void initialize_poll_fds(PollFds &poll_fds, const ServerSockets &sockets)
+{
     poll_fds.clear();
-    poll_fds.push_back({sockets.tcp, POLLIN, 0});   // [0] TCP listener
-    poll_fds.push_back({sockets.udp, POLLIN, 0});   // [1] UDP socket
+    poll_fds.push_back({sockets.tcp, POLLIN, 0});  // [0] TCP listener
+    poll_fds.push_back({sockets.udp, POLLIN, 0});  // [1] UDP socket
     poll_fds.push_back({STDIN_FILENO, POLLIN, 0}); // [2] Standard input
 }
 
 // --- Main Loop Event Handlers ---
-static void handle_stdin(bool& running) {
-    char buffer[BUFFER_SIZE]; memset(buffer, 0, BUFFER_SIZE);
-    if (fgets(buffer, BUFFER_SIZE - 1, stdin) != NULL) {
+static void handle_stdin(bool &running)
+{
+    char buffer[BUFFER_SIZE];
+    memset(buffer, 0, BUFFER_SIZE);
+    if (fgets(buffer, BUFFER_SIZE - 1, stdin) != NULL)
+    {
         buffer[strcspn(buffer, "\n")] = 0;
-        if (strcmp(buffer, "exit") == 0) running = false;
-    } else { running = false; } // EOF or error
+        if (strcmp(buffer, "exit") == 0)
+        {
+            running = false;
+        }
+    }
+    else
+    {
+        running = false;
+    }
 }
 
-static void handle_new_connection(int listener_socket, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
-    struct sockaddr_in client_addr; socklen_t client_len = sizeof(client_addr);
-    int client_socket = accept(listener_socket, (struct sockaddr *) &client_addr, &client_len);
-    if (client_socket < 0) { perror("WARN: accept failed"); return; }
-    int flag = 1; if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int)) < 0) perror("WARN: setsockopt TCP_NODELAY failed");
+static void handle_new_connection(int listener_socket, PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id)
+{
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int client_socket = accept(listener_socket, (struct sockaddr *)&client_addr, &client_len);
+    if (client_socket < 0)
+    {
+        perror("WARN: accept failed");
+        return;
+    }
+    int flag = 1;
+    if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, &flag,
+                   sizeof(int)) < 0)
+    {
+        perror("WARN: setsockopt TCP_NODELAY failed");
+    }
 
     std::string client_id_str;
-    if (!receive_client_id(client_socket, client_id_str)) { close(client_socket); return; }
+    if (!receive_client_id(client_socket, client_id_str))
+    {
+        close(client_socket);
+        return;
+    }
 
     auto it = subscribers.find(client_id_str);
-    if (it != subscribers.end()) { // ID exists
-        if (it->second.connected) {
-            std::cout << "Client " << client_id_str << " already connected." << std::endl; fflush(stdout);
+    if (it != subscribers.end())
+    {
+        if (it->second.connected)
+        {
+            std::cout << "Client " << client_id_str << " already connected." << std::endl;
+            fflush(stdout);
             close(client_socket);
-        } else { handle_reconnection(it->second, client_socket, client_addr, poll_fds, socket_to_id); }
-    } else { handle_new_client(client_id_str, client_socket, client_addr, poll_fds, subscribers, socket_to_id); }
+        }
+        else
+        {
+            handle_reconnection(it->second, client_socket, client_addr, poll_fds, socket_to_id);
+        }
+    }
+    else
+    {
+        handle_new_client(client_id_str, client_socket, client_addr, poll_fds, subscribers, socket_to_id);
+    }
 }
 
-static void handle_udp_message(int udp_socket, SubscribersMap& subscribers) {
-    char buffer[BUFFER_SIZE]; UdpMessage udp_msg; struct sockaddr_in udp_sender_addr; socklen_t udp_sender_len = sizeof(udp_sender_addr);
+static void handle_udp_message(int udp_socket, SubscribersMap &subscribers)
+{
+    char buffer[BUFFER_SIZE];
+    UdpMessage udp_msg;
+    struct sockaddr_in udp_sender_addr;
+    socklen_t udp_sender_len = sizeof(udp_sender_addr);
     memset(buffer, 0, BUFFER_SIZE);
-    int bytes_received = recvfrom(udp_socket, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *) &udp_sender_addr, &udp_sender_len);
-    if (bytes_received <= 0) { if (bytes_received < 0) perror("WARN: recvfrom UDP failed"); return; }
+    int bytes_received = recvfrom(udp_socket, buffer, BUFFER_SIZE - 1, 0, (struct sockaddr *)&udp_sender_addr, &udp_sender_len);
+    if (bytes_received <= 0)
+    {
+        if (bytes_received < 0)
+        {
+            perror("WARN: recvfrom UDP failed");
+        }
+        return;
+    }
 
-    if (!parse_udp_datagram(buffer, bytes_received, udp_msg)) return;
+    if (!parse_udp_datagram(buffer, bytes_received, udp_msg))
+    {
+        return;
+    }
     udp_msg.sender_addr = udp_sender_addr;
 
     std::vector<char> serialized_packet = serialize_forward_message(udp_msg);
     distribute_udp_message(udp_msg, serialized_packet, subscribers);
 }
 
-static void handle_client_activity(PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
+static void handle_client_activity(PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id)
+{
     char recv_tmp_buffer[BUFFER_SIZE];
-    for (int i = poll_fds.size() - 1; i >= 3; --i) { // Iterate backwards over client FDs
-         if (i >= (int)poll_fds.size()) continue; // Index check after potential erase
-        struct pollfd& pfd = poll_fds[i];
+    for (int i = poll_fds.size() - 1; i >= 3; --i)
+    {
+        if (i >= (int)poll_fds.size())
+        {
+            continue;
+        }
+        struct pollfd &pfd = poll_fds[i];
         int client_socket = pfd.fd;
-        if (pfd.revents == 0) continue;
+        if (pfd.revents == 0)
+        {
+            continue;
+        }
 
         auto id_it = socket_to_id.find(client_socket);
-        if (id_it == socket_to_id.end()) { close(client_socket); poll_fds.erase(poll_fds.begin() + i); continue; }
+        if (id_it == socket_to_id.end())
+        {
+            close(client_socket);
+            poll_fds.erase(poll_fds.begin() + i);
+            continue;
+        }
         std::string client_id_str = id_it->second;
         auto sub_it = subscribers.find(client_id_str);
-        if (sub_it == subscribers.end()) { close(client_socket); socket_to_id.erase(id_it); poll_fds.erase(poll_fds.begin() + i); continue; }
-        Subscriber& sub = sub_it->second;
+        if (sub_it == subscribers.end())
+        {
+            close(client_socket);
+            socket_to_id.erase(id_it);
+            poll_fds.erase(poll_fds.begin() + i);
+            continue;
+        }
+        Subscriber &sub = sub_it->second;
 
         bool client_disconnected = false;
-        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            if (sub.connected) std::cout << "Client " << client_id_str << " disconnected (poll error/hup)." << std::endl; fflush(stdout);
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
+        {
+            if (sub.connected)
+            {
+                std::cout << "Client " << client_id_str << " disconnected (poll error/hup)." << std::endl;
+                fflush(stdout);
+            }
             client_disconnected = true;
-        } else if (pfd.revents & POLLIN) {
+        }
+        else if (pfd.revents & POLLIN)
+        {
             memset(recv_tmp_buffer, 0, BUFFER_SIZE);
             int bytes_received = recv(client_socket, recv_tmp_buffer, BUFFER_SIZE - 1, 0);
-            if (bytes_received <= 0) {
-                if (bytes_received < 0 && errno != ECONNRESET && errno != EINTR && errno != EPIPE) perror("WARN: recv from client failed");
-                if (sub.connected) std::cout << "Client " << client_id_str << " disconnected." << std::endl; fflush(stdout);
+            if (bytes_received <= 0)
+            {
+                if (bytes_received < 0 && errno != ECONNRESET && errno != EINTR &&
+                    errno != EPIPE)
+                {
+                    perror("WARN: recv from client failed");
+                }
+                if (sub.connected)
+                {
+                    std::cout << "Client " << client_id_str << " disconnected." << std::endl;
+                    fflush(stdout);
+                }
                 client_disconnected = true;
-            } else {
-                if (!sub.command_buffer.write(recv_tmp_buffer, bytes_received)) {
-                    std::cerr << "ERROR: Client " << client_id_str << " command buffer overflow. Disconnecting." << std::endl; fflush(stderr);
+            }
+            else
+            {
+                if (!sub.command_buffer.write(recv_tmp_buffer, bytes_received))
+                {
+                    std::cerr << "ERROR: Client " << client_id_str << " command buffer overflow. Disconnecting." << std::endl;
+                    fflush(stderr);
                     client_disconnected = true;
-                } else if (!process_commands_from_buffer(sub)) {
-                     std::cerr << "ERROR: Client " << client_id_str << " failed processing commands. Disconnecting." << std::endl; fflush(stderr);
-                     client_disconnected = true;
+                }
+                else if (!process_commands_from_buffer(sub))
+                {
+                    std::cerr << "ERROR: Client " << client_id_str << " failed processing commands. Disconnecting." << std::endl;
+                    fflush(stderr);
+                    client_disconnected = true;
                 }
             }
         }
 
-        if (client_disconnected) {
+        if (client_disconnected)
+        {
             handle_client_disconnection(client_socket, i, client_id_str, poll_fds, subscribers, socket_to_id);
-            // loop continues with i--
         }
     }
 }
 
-// --- Client Connection Helpers ---
-static bool receive_client_id(int client_socket, std::string& client_id_str) {
-    char buffer[BUFFER_SIZE]; memset(buffer, 0, BUFFER_SIZE);
+static bool receive_client_id(int client_socket, std::string &client_id_str)
+{
+    char buffer[BUFFER_SIZE];
+    memset(buffer, 0, BUFFER_SIZE);
     int bytes_received = recv(client_socket, buffer, MAX_ID_SIZE + 1, 0);
-    if (bytes_received <= 0) return false;
-    buffer[std::min(bytes_received, MAX_ID_SIZE)] = '\0'; // Ensure null term within bounds
-    if (strcspn(buffer, "\n\r\0") != strlen(buffer)) return false; // Invalid chars
-    if (strlen(buffer) > MAX_ID_SIZE) return false; // Too long
+    if (bytes_received <= 0)
+    {
+        return false;
+    }
+    buffer[std::min(bytes_received, MAX_ID_SIZE)] = '\0';
+    if (strcspn(buffer, "\n\r\0") != strlen(buffer))
+    {
+        return false;
+    }
+    if (strlen(buffer) > MAX_ID_SIZE)
+    {
+        return false;
+    }
     client_id_str = buffer;
     return true;
 }
 
-static void handle_reconnection(Subscriber& sub, int new_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SocketToIdMap& socket_to_id) {
-    char client_ip_str[INET_ADDRSTRLEN]; inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
-    std::cout << "New client " << sub.id << " connected from " << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl; fflush(stdout);
-    sub.socket = new_socket; sub.connected = true; sub.command_buffer.reset();
-    poll_fds.push_back({new_socket, POLLIN, 0}); socket_to_id[new_socket] = sub.id;
-    send_stored_messages(sub); sub.stored_messages.clear();
+static void handle_reconnection(Subscriber &sub, int new_socket, const struct sockaddr_in &client_addr, PollFds &poll_fds, SocketToIdMap &socket_to_id)
+{
+    char client_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
+    std::cout << "New client " << sub.id << " connected from " << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
+    fflush(stdout);
+    sub.socket = new_socket;
+    sub.connected = true;
+    sub.command_buffer.reset();
+    poll_fds.push_back({new_socket, POLLIN, 0});
+    socket_to_id[new_socket] = sub.id;
+    send_stored_messages(sub);
+    sub.stored_messages.clear();
 }
 
-static void handle_new_client(const std::string& client_id, int client_socket, const struct sockaddr_in& client_addr, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
-    char client_ip_str[INET_ADDRSTRLEN]; inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
-    std::cout << "New client " << client_id << " connected from " << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl; fflush(stdout);
-    Subscriber& new_sub = subscribers[client_id]; // Creates if not exists
-    strncpy(new_sub.id, client_id.c_str(), MAX_ID_SIZE); new_sub.id[MAX_ID_SIZE] = '\0';
-    new_sub.socket = client_socket; new_sub.connected = true;
-    poll_fds.push_back({client_socket, POLLIN, 0}); socket_to_id[client_socket] = client_id;
+static void handle_new_client(const std::string &client_id, int client_socket, const struct sockaddr_in &client_addr, PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id)
+{
+    char client_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, client_ip_str, INET_ADDRSTRLEN);
+    std::cout << "New client " << client_id << " connected from " << client_ip_str << ":" << ntohs(client_addr.sin_port) << "." << std::endl;
+    fflush(stdout);
+    Subscriber &new_sub = subscribers[client_id];
+    strncpy(new_sub.id, client_id.c_str(), MAX_ID_SIZE);
+    new_sub.id[MAX_ID_SIZE] = '\0';
+    new_sub.socket = client_socket;
+    new_sub.connected = true;
+    poll_fds.push_back({client_socket, POLLIN, 0});
+    socket_to_id[client_socket] = client_id;
 }
 
-static void send_stored_messages(Subscriber& sub) {
-    for (const std::vector<char>& stored_packet : sub.stored_messages) {
+static void send_stored_messages(Subscriber &sub)
+{
+    for (const std::vector<char> &stored_packet : sub.stored_messages)
+    {
         ssize_t sent = send_all(sub.socket, stored_packet.data(), stored_packet.size(), MSG_NOSIGNAL);
-        if (sent < 0 || (size_t)sent != stored_packet.size()) {
-            if (errno != EPIPE && errno != ECONNRESET) perror("WARN: send stored message failed during reconnect");
+        if (sent < 0 || (size_t)sent != stored_packet.size())
+        {
+            if (errno != EPIPE && errno != ECONNRESET)
+            {
+                perror("WARN: send stored message failed during reconnect");
+            }
             break;
         }
     }
 }
 
-// --- Client Activity Helpers ---
-static void handle_client_disconnection(int client_socket, size_t poll_index, const std::string& client_id, PollFds& poll_fds, SubscribersMap& subscribers, SocketToIdMap& socket_to_id) {
+static void handle_client_disconnection(int client_socket, size_t poll_index, const std::string &client_id, PollFds &poll_fds, SubscribersMap &subscribers, SocketToIdMap &socket_to_id)
+{
     close(client_socket);
     auto sub_it = subscribers.find(client_id);
-    if (sub_it != subscribers.end()) {
-        sub_it->second.connected = false; sub_it->second.socket = -1; sub_it->second.command_buffer.reset();
+    if (sub_it != subscribers.end())
+    {
+        sub_it->second.connected = false;
+        sub_it->second.socket = -1;
+        sub_it->second.command_buffer.reset();
     }
     socket_to_id.erase(client_socket);
-    // Safely erase from poll_fds using index only if valid
-    if (poll_index < poll_fds.size() && poll_fds[poll_index].fd == client_socket) {
-         poll_fds.erase(poll_fds.begin() + poll_index);
-    } else { // Find again if index shifted (less likely with backward iteration but safe)
-         auto pfd_it = std::find_if(poll_fds.begin() + 3, poll_fds.end(), [client_socket](const struct pollfd& p){ return p.fd == client_socket; });
-         if (pfd_it != poll_fds.end()) { poll_fds.erase(pfd_it); }
+
+    if (poll_index < poll_fds.size() && poll_fds[poll_index].fd == client_socket)
+    {
+        poll_fds.erase(poll_fds.begin() + poll_index);
+    }
+    else
+    {
+        auto pfd_it = std::find_if(poll_fds.begin() + 3, poll_fds.end(), [client_socket](const struct pollfd &p)
+                                   { return p.fd == client_socket; });
+        if (pfd_it != poll_fds.end())
+        {
+            poll_fds.erase(pfd_it);
+        }
     }
 }
 
-static bool process_commands_from_buffer(Subscriber& sub) {
+static bool process_commands_from_buffer(Subscriber &sub)
+{
     ssize_t newline_offset;
-    while ((newline_offset = sub.command_buffer.find('\n')) >= 0) {
+    while ((newline_offset = sub.command_buffer.find('\n')) >= 0)
+    {
         std::string command_line = sub.command_buffer.substr(0, newline_offset);
         sub.command_buffer.consume(newline_offset + 1);
-        command_line.erase(0, command_line.find_first_not_of(" \t\r\n")); command_line.erase(command_line.find_last_not_of(" \t\r\n") + 1);
-        if (!command_line.empty()) {
+        command_line.erase(0, command_line.find_first_not_of(" \t\r\n"));
+        command_line.erase(command_line.find_last_not_of(" \t\r\n") + 1);
+        if (!command_line.empty())
+        {
             parse_and_execute_command(sub, command_line);
-            // If parse_and_execute_command could fail critically, add check: if (!...) return false;
         }
     }
     return true;
 }
 
-static void parse_and_execute_command(Subscriber& sub, const std::string& command_line) {
-    std::stringstream ss(command_line); std::string command_verb; ss >> command_verb;
-    if (command_verb == "subscribe") {
-        std::string topic; int sf = -1;
-        if (ss >> topic >> sf && (sf == 0 || sf == 1) && ss.peek() == EOF) {
-            if (topic.length() <= TOPIC_SIZE) sub.topics[topic] = (sf == 1);
-        } // else: ignore invalid format silently
-    } else if (command_verb == "unsubscribe") {
+static void parse_and_execute_command(Subscriber &sub, const std::string &command_line)
+{
+    std::stringstream ss(command_line);
+    std::string command_verb;
+    ss >> command_verb;
+
+    if (command_verb == "subscribe")
+    {
         std::string topic;
-        if (ss >> topic && ss.peek() == EOF) {
-            if (topic.length() <= TOPIC_SIZE) sub.topics.erase(topic);
-        } // else: ignore invalid format silently
-    } // else: ignore unknown command silently
+        int sf = -1;
+        if (ss >> topic >> sf && (sf == 0 || sf == 1) && ss.peek() == EOF)
+        {
+            if (topic.length() <= TOPIC_SIZE)
+            {
+                sub.topics[topic] = (sf == 1);
+            }
+            else
+            {
+                std::cerr << "ERROR: Topic too long (max " << TOPIC_SIZE << " characters)." << std::endl;
+            }
+        }
+    }
+
+    else if (command_verb == "unsubscribe")
+    {
+        std::string topic;
+        if (ss >> topic && ss.peek() == EOF)
+        {
+            if (topic.length() <= TOPIC_SIZE)
+            {
+                sub.topics.erase(topic);
+            }
+            else
+            {
+                std::cerr << "ERROR: Topic too long (max " << TOPIC_SIZE << " characters)." << std::endl;
+            }
+        }
+    }
+
+    else
+    {
+        std::cerr << "ERROR: Unknown command." << std::endl;
+    }
 }
 
-// --- UDP Message Helpers ---
-static bool parse_udp_datagram(const char* buffer, int bytes_received, UdpMessage& udp_msg) {
+static bool parse_udp_datagram(const char *buffer, int bytes_received, UdpMessage &udp_msg)
+{
     memset(&udp_msg, 0, sizeof(UdpMessage));
     int topic_len_to_copy = std::min(bytes_received, TOPIC_SIZE);
     memcpy(udp_msg.topic, buffer, topic_len_to_copy);
-    udp_msg.topic[std::min(topic_len_to_copy, TOPIC_SIZE)] = '\0'; // Ensure null termination
+    udp_msg.topic[std::min(topic_len_to_copy, TOPIC_SIZE)] = '\0';
 
-    if (bytes_received < (TOPIC_SIZE + 1)) return false; // Too short for topic + type
+    if (bytes_received < (TOPIC_SIZE + 1))
+    {
+        return false;
+    }
     udp_msg.type = (uint8_t)buffer[TOPIC_SIZE];
 
     udp_msg.content_len = bytes_received - (TOPIC_SIZE + 1);
-    if (udp_msg.content_len < 0) udp_msg.content_len = 0; // Should be >= 0
+    if (udp_msg.content_len < 0)
+    {
+        udp_msg.content_len = 0;
+    }
 
-    if (udp_msg.content_len > 0) {
+    if (udp_msg.content_len > 0)
+    {
         int content_len_to_copy = std::min(udp_msg.content_len, MAX_CONTENT_SIZE);
         memcpy(udp_msg.content, buffer + TOPIC_SIZE + 1, content_len_to_copy);
-        udp_msg.content[content_len_to_copy] = '\0'; // Ensure null term within MAX_CONTENT_SIZE+1
-        udp_msg.content_len = content_len_to_copy; // Reflect potential truncation
-    } else {
-        udp_msg.content[0] = '\0'; // Null term empty content
+        udp_msg.content[content_len_to_copy] = '\0';
+        udp_msg.content_len = content_len_to_copy;
+    }
+    else
+    {
+        udp_msg.content[0] = '\0';
     }
     return true;
 }
@@ -944,18 +1592,19 @@ static bool parse_udp_datagram(const char* buffer, int bytes_received, UdpMessag
 // Format: [Total Payload Len (NBO uint32_t)] [Sender IP (NBO uint32_t)] [Sender Port (NBO uint16_t)]
 //         [Topic Len (uint8_t)] [Topic (char*)] [UDP Type (uint8_t)]
 //         [Content Len (NBO uint16_t)] [Content (char*)]
-static std::vector<char> serialize_forward_message(const UdpMessage& msg) {
+static std::vector<char> serialize_forward_message(const UdpMessage &msg)
+{
     std::vector<char> payload_buffer;
     payload_buffer.reserve(sizeof(uint32_t) + sizeof(uint16_t) + 1 + TOPIC_SIZE + 1 + sizeof(uint16_t) + MAX_CONTENT_SIZE + 10);
 
     // 1. Sender IP (Network Byte Order - Already NBO from recvfrom)
     uint32_t net_ip = msg.sender_addr.sin_addr.s_addr;
-    const char* ip_bytes = reinterpret_cast<const char*>(&net_ip);
+    const char *ip_bytes = reinterpret_cast<const char *>(&net_ip);
     payload_buffer.insert(payload_buffer.end(), ip_bytes, ip_bytes + sizeof(net_ip));
 
     // 2. Sender Port (Network Byte Order - Already NBO from recvfrom)
     uint16_t net_port = msg.sender_addr.sin_port;
-    const char* port_bytes = reinterpret_cast<const char*>(&net_port);
+    const char *port_bytes = reinterpret_cast<const char *>(&net_port);
     payload_buffer.insert(payload_buffer.end(), port_bytes, port_bytes + sizeof(net_port));
 
     // 3. Topic Length & Topic
@@ -970,17 +1619,18 @@ static std::vector<char> serialize_forward_message(const UdpMessage& msg) {
     // 5. Content Length & Content (Network Byte Order for length)
     uint16_t content_len_16 = static_cast<uint16_t>(msg.content_len);
     uint16_t net_content_len = htons(content_len_16); // Convert length to NBO
-    const char* content_len_bytes = reinterpret_cast<const char*>(&net_content_len);
+    const char *content_len_bytes = reinterpret_cast<const char *>(&net_content_len);
     payload_buffer.insert(payload_buffer.end(), content_len_bytes, content_len_bytes + sizeof(net_content_len));
-    if (msg.content_len > 0) {
-         payload_buffer.insert(payload_buffer.end(), msg.content, msg.content + msg.content_len);
+    if (msg.content_len > 0)
+    {
+        payload_buffer.insert(payload_buffer.end(), msg.content, msg.content + msg.content_len);
     }
 
     // 6. Prepend total payload length (Network Byte Order)
     std::vector<char> final_packet;
     uint32_t total_payload_len_32 = static_cast<uint32_t>(payload_buffer.size());
     uint32_t net_total_payload_len = htonl(total_payload_len_32); // Convert total length to NBO
-    const char* total_len_bytes = reinterpret_cast<const char*>(&net_total_payload_len);
+    const char *total_len_bytes = reinterpret_cast<const char *>(&net_total_payload_len);
     // Reserve space for length prefix + payload
     final_packet.reserve(sizeof(net_total_payload_len) + payload_buffer.size());
     // Insert length prefix first
@@ -991,24 +1641,34 @@ static std::vector<char> serialize_forward_message(const UdpMessage& msg) {
     return final_packet;
 }
 
-
-static void distribute_udp_message(const UdpMessage& msg, const std::vector<char>& serialized_packet, SubscribersMap& subscribers) {
+static void distribute_udp_message(const UdpMessage &msg, const std::vector<char> &serialized_packet, SubscribersMap &subscribers)
+{
     std::string topic_str(msg.topic);
-    for (auto& pair : subscribers) {
-        Subscriber& sub = pair.second;
-        for (const auto& topic_pair : sub.topics) {
-            const std::string& pattern = topic_pair.first;
+    for (auto &pair : subscribers)
+    {
+        Subscriber &sub = pair.second;
+        for (const auto &topic_pair : sub.topics)
+        {
+            const std::string &pattern = topic_pair.first;
             bool sf_enabled = topic_pair.second;
-            if (topicMatches(topic_str, pattern)) {
-                if (sub.connected) {
+            if (topicMatches(topic_str, pattern))
+            {
+                if (sub.connected)
+                {
                     ssize_t sent = send_all(sub.socket, serialized_packet.data(), serialized_packet.size(), MSG_NOSIGNAL);
-                    if (sent < 0 || (size_t)sent != serialized_packet.size()) {
-                         if (errno != EPIPE && errno != ECONNRESET) perror("WARN: send_all to subscriber failed");
+                    if (sent < 0 || (size_t)sent != serialized_packet.size())
+                    {
+                        if (errno != EPIPE && errno != ECONNRESET)
+                        {
+                            perror("WARN: send_all to subscriber failed");
+                        }
                     }
-                } else if (sf_enabled) {
+                }
+                else if (sf_enabled)
+                {
                     sub.stored_messages.push_back(serialized_packet);
                 }
-                break; // Send/store only once per subscriber per UDP message
+                break;
             }
         }
     }
@@ -1044,6 +1704,9 @@ VPATH := $(SRC_DIR):$(LIB_DIR)
 
 all: $(BINARY)
 
+test: all
+	sudo python3 test.py
+
 $(SERVER_EXEC): $(OBJECTS_SERVER) $(OBJECTS_COMMON)
 	@echo "Linking $@..."
 	$(CXX) $^ -o $@ $(LDFLAGS)  # Use CXX, $^ includes both prerequisites
@@ -1060,12 +1723,8 @@ clean:
 	@echo "Cleaning up..."
 	rm -f $(ALL_OBJECTS) $(BINARY) core.* *~
 
-.PHONY: all clean
+.PHONY: all clean test
 ```
 
 
-in server.cpp the function handle_udp_message loops through two hashmaps: subscribers and sub.topics. Do you think you can keep a hashmap but with the elements reversed so you can reduce the time complexity?
-Can you make the topicMatches even more efficient? Maybe use a trie? I don't know if it is a good ideea, but make it more efficient.
-Do not change the the messages of the logs
-Do not use global variables
-AND WHATEVER YOU DO DO NOT CHANGE THE FUNCTIONALITY OF THE CODE
+make a documentation of the code in README.md format. Be verbose
